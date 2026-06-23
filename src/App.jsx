@@ -3185,7 +3185,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
   const S = {
     app: {
       background: COLORS.bg, color: COLORS.text,
-      height: "100vh", minHeight: "100vh",
+      minHeight: "100vh",
       fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
       display: "flex", flexDirection: "column", fontSize: 14,
       overflow: "hidden", width: "100%", maxWidth: "100vw",
@@ -4866,7 +4866,28 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
 
   // ─── Root render ─────────────────────────────────────────────────────────────
   return (
-    <div style={S.app}>
+    <div style={S.app} className="cupscan-app-root">
+      <style>{`
+        html, body {
+          height: 100%;
+          margin: 0;
+          overflow: hidden;
+          position: fixed;
+          width: 100%;
+        }
+        #root, #__next {
+          height: 100%;
+          overflow: hidden;
+        }
+        .cupscan-app-root {
+          height: 100vh;
+        }
+        @supports (height: 100dvh) {
+          .cupscan-app-root {
+            height: 100dvh;
+          }
+        }
+      `}</style>
       {/* Header */}
       <div style={S.header}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 0 }}>
