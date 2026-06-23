@@ -2270,7 +2270,7 @@ const SVGDomainGraph = memo(function SVGDomainGraph({ nodes, selectedId, onSelec
 });
 
 /* ── Domain Node Detail Drawer ── */
-function DomainDrawer({ node, allNodes, onClose }) {
+function DomainDrawer({ node, allNodes, onClose, isMobile }) {
   useEffect(() => {
     const hk = (e) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", hk);
@@ -2289,7 +2289,11 @@ function DomainDrawer({ node, allNodes, onClose }) {
   const scoreLbl = node.score >= 0.65 ? "Strong" : node.score >= 0.35 ? "Moderate" : "Weak";
 
   return (
-    <div style={{
+    <div style={isMobile ? {
+      position: "fixed", inset: 0, zIndex: 400,
+      background: "#1a1d27", display: "flex", flexDirection: "column",
+      overflowY: "auto", width: "100%",
+    } : {
       width: 300, flexShrink: 0, borderLeft: "1px solid #2a2f45",
       background: "#1a1d27", display: "flex", flexDirection: "column",
       overflowY: "auto",
@@ -3180,9 +3184,12 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
   // ─── Styles ──────────────────────────────────────────────────────────────────
   const S = {
     app: {
-      background: COLORS.bg, color: COLORS.text, minHeight: "100vh",
+      background: COLORS.bg, color: COLORS.text,
+      height: "100vh", minHeight: "100vh",
       fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
       display: "flex", flexDirection: "column", fontSize: 14,
+      overflow: "hidden", width: "100%", maxWidth: "100vw",
+      boxSizing: "border-box",
     },
     header: {
       background: COLORS.surface, borderBottom: `1px solid ${COLORS.border}`,
@@ -3210,7 +3217,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       cursor: "pointer", background: "none", border: "none",
       outline: "none", transition: "color 0.15s", whiteSpace: "nowrap"
     }),
-    panel: { flex: 1, overflow: "auto", minHeight: 0, paddingBottom: isMobile ? 64 : 0 },
+    panel: { flex: 1, overflow: "auto", minHeight: 0, minWidth: 0, paddingBottom: isMobile ? 64 : 0 },
     card: {
       background: COLORS.surfaceHover, border: `1px solid ${COLORS.border}`,
       borderRadius: 10, padding: 14, marginBottom: 10
@@ -3707,7 +3714,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                   </div>
                   <ScoreRing score={item.score} size={42} dashed={!!item.forming} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                       <span style={{ fontWeight: 700, fontSize: 14, color: selected ? COLORS.accent : COLORS.text }}>
                         {item.ticker}
                       </span>
@@ -3851,8 +3858,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {/* Ticker header */}
         <div style={{
-          padding: "12px 20px", borderBottom: `1px solid ${COLORS.border}`,
-          display: "flex", alignItems: "center", gap: 16, flexShrink: 0,
+          padding: isMobile ? "10px 12px" : "12px 20px", borderBottom: `1px solid ${COLORS.border}`,
+          display: "flex", alignItems: "center", gap: isMobile ? 8 : 16, flexShrink: 0,
           background: COLORS.surface, flexWrap: "wrap"
         }}>
           {/* Ticker + prev/next nav */}
@@ -3951,7 +3958,13 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               Cup/Flag pick the SETUP (and sync the leaderboard ranking);
               Momentum Gradient is the confirmation view. No separate
               "Pattern" button — the setup buttons imply the pattern view. */}
-          <div style={{ display: "flex", gap: 8, marginLeft: "auto", alignItems: "center" }}>
+          <div style={{
+            display: "flex", gap: 8, alignItems: "center",
+            marginLeft: isMobile ? 0 : "auto",
+            width: isMobile ? "100%" : "auto",
+            overflowX: isMobile ? "auto" : "visible",
+            WebkitOverflowScrolling: "touch",
+          }}>
             {(() => {
               const row = scores.find(s => s.ticker === selectedTicker);
               const hasCup = !!row?.cup?.detection;
@@ -3971,11 +3984,12 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                     handleSetupChange(id, has);
                   }}
                   style={{
-                    padding: "11px 18px", borderRadius: 9, fontSize: 14, fontWeight: 700,
+                    padding: isMobile ? "8px 12px" : "11px 18px", borderRadius: 9,
+                    fontSize: isMobile ? 12 : 14, fontWeight: 700,
                     border: `1px solid ${activePattern === id ? color : COLORS.border}`,
                     background: activePattern === id ? `${color}22` : COLORS.surfaceHover,
                     color: activePattern === id ? color : (has ? COLORS.text : COLORS.textDim),
-                    cursor: "pointer", whiteSpace: "nowrap",
+                    cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
                   }}
                 >
                   {label}
@@ -3989,7 +4003,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                   <button
                     onClick={() => setChartSubTab("gradient")}
                     style={{
-                      padding: "11px 18px", borderRadius: 9, fontSize: 14, fontWeight: 700,
+                      padding: isMobile ? "8px 12px" : "11px 18px", borderRadius: 9,
+                      fontSize: isMobile ? 12 : 14, fontWeight: 700, flexShrink: 0,
                       border: `1px solid ${chartSubTab === "gradient" ? COLORS.accent : COLORS.border}`,
                       background: chartSubTab === "gradient" ? COLORS.accentDim : COLORS.surfaceHover,
                       color: chartSubTab === "gradient" ? COLORS.accent : COLORS.text,
@@ -4482,7 +4497,12 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               const scoreColor = pulseColor(d.total);
               const isPinned = !!pinnedTicker;
               return (
-                <div style={{
+                <div style={isMobile ? {
+                  position: "fixed", bottom: 0, left: 0, right: 0, top: "auto", zIndex: 1000,
+                  background: COLORS.surface, border: `2px solid ${isPinned ? COLORS.gold : COLORS.border}`,
+                  borderRadius: "16px 16px 0 0", padding: "14px 16px", maxHeight: "70vh", overflowY: "auto",
+                  boxShadow: isPinned ? `0 8px 32px ${COLORS.gold}33` : "0 -8px 32px rgba(0,0,0,0.6)",
+                } : {
                   position: "fixed", top: 80, right: 24, zIndex: 1000,
                   background: COLORS.surface, border: `2px solid ${isPinned ? COLORS.gold : COLORS.border}`,
                   borderRadius: 12, padding: "14px 16px", minWidth: 220,
@@ -4549,7 +4569,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                   </div>
                   <div style={{ marginTop: 10 }}>
                     <div style={{ fontSize: 10, color: COLORS.textMuted, marginBottom: 4 }}>Per-bar signals</div>
-                    <svg width="100%" height={28} style={{ display: "block" }}>
+                    <svg width="100%" height={28} viewBox="0 0 188 28" preserveAspectRatio="none" style={{ display: "block" }}>
                       {d.signals.map((s, i) => {
                         const x = (i / (d.signals.length - 1)) * 188;
                         const color = s === 1 ? COLORS.green : s === -1 ? COLORS.red : COLORS.border;
@@ -4829,6 +4849,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                 node={selectedDomainNode}
                 allNodes={domainNodes}
                 onClose={() => setSelectedDomainNode(null)}
+                isMobile={isMobile}
               />
             )}
           </div>
@@ -4846,8 +4867,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           <span style={S.logo}>⌖ CupScan</span>
           {!isMobile && <span style={S.logoSub}>Breakout Setup Engine v12 · Cup &amp; Reverse H&amp;S</span>}
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {scanStatus === "done" && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+          {scanStatus === "done" && !isMobile && (
             <span style={{
               fontSize: 11, padding: "3px 10px", borderRadius: 20, fontWeight: 600,
               background: "rgba(38,166,154,0.15)", color: COLORS.green, border: `1px solid ${COLORS.green}`
@@ -4862,15 +4883,17 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           >
             {darkMode ? "☀️" : "🌙"}
           </button>
-          <button
-            style={{ ...S.btn("ghost"), fontSize: 11, padding: "4px 10px", color: COLORS.textDim }}
-            title="Keyboard shortcuts: J/K navigate · Enter open chart · H heatmap · L leaderboard · D domain"
-          >
-            ⌨
-          </button>
+          {!isMobile && (
+            <button
+              style={{ ...S.btn("ghost"), fontSize: 11, padding: "4px 10px", color: COLORS.textDim }}
+              title="Keyboard shortcuts: J/K navigate · Enter open chart · H heatmap · L leaderboard · D domain"
+            >
+              ⌨
+            </button>
+          )}
           {rawData && (
             <button style={S.btn("secondary", !scores.length)} onClick={handleExport} disabled={!scores.length}>
-              Export CSV
+              {isMobile ? "↓ CSV" : "Export CSV"}
             </button>
           )}
         </div>
