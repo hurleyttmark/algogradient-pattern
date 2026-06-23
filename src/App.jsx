@@ -3217,7 +3217,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       cursor: "pointer", background: "none", border: "none",
       outline: "none", transition: "color 0.15s", whiteSpace: "nowrap"
     }),
-    panel: { flex: 1, overflow: "auto", minHeight: 0, minWidth: 0, paddingBottom: isMobile ? 64 : 0 },
+    panel: { flex: 1, overflow: "auto", minHeight: 0, minWidth: 0, paddingBottom: isMobile ? 64 : 0, overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" },
     card: {
       background: COLORS.surfaceHover, border: `1px solid ${COLORS.border}`,
       borderRadius: 10, padding: 14, marginBottom: 10
@@ -4034,7 +4034,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                 flexShrink: 0, flexWrap: "wrap",
                 borderBottom: `1px solid ${COLORS.border}`, background: COLORS.surface,
               }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", rowGap: 6 }}>
                   <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".08em", color: COLORS.textDim }}>
                     Price trend
                   </span>
@@ -4042,23 +4042,23 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                     ["rgba(214,188,60,0.8)","Neutral"],
                     ["rgba(238,140,120,0.9)","Weak bear"],["rgba(220,72,60,0.9)","Bearish"],["rgba(176,20,20,0.9)","Strong bear"]].map(([c,l]) => (
                     <div key={l} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                      <div style={{ width: 13, height: 13, borderRadius: 3, background: c, border: "1px solid rgba(255,255,255,0.15)" }} />
+                      <div style={{ width: 13, height: 13, borderRadius: 3, background: c, border: "1px solid rgba(255,255,255,0.15)", flexShrink: 0 }} />
                       <span style={{ fontSize: 11, color: COLORS.textDim, whiteSpace: "nowrap" }}>{l}</span>
                     </div>
                   ))}
                 </div>
-                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ marginLeft: isMobile ? 0 : "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".08em", color: COLORS.textDim }}>
                     Momentum
                   </span>
                   <span style={{ fontSize: 11, color: "#b30000", fontWeight: 700 }}>Bear</span>
-                  <div style={{ width: 120, height: 12, borderRadius: 4, border: "1px solid rgba(255,255,255,0.15)",
+                  <div style={{ width: 120, height: 12, borderRadius: 4, border: "1px solid rgba(255,255,255,0.15)", flexShrink: 0,
                     background: "linear-gradient(90deg,#5b0000,#b30000,#ff6600,#ffd700,#bfff00,#66cc66,#006400)" }} />
                   <span style={{ fontSize: 11, color: "#1b8f5a", fontWeight: 700 }}>Bull</span>
                 </div>
               </div>
               {/* Canvas chart fills remainder */}
-              <div style={isMobile ? { height: 380, flexShrink: 0, padding: "12px 16px 8px" } : { flex: 1, minHeight: 0, padding: "12px 16px 8px" }}>
+              <div style={isMobile ? { height: 380, flexShrink: 0, padding: "12px 16px 8px", boxSizing: "border-box" } : { flex: 1, minHeight: 0, padding: "12px 16px 8px" }}>
                 <PulseChart data={chartData} />
               </div>
             </>
@@ -4868,12 +4868,17 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
   return (
     <div style={S.app} className="cupscan-app-root">
       <style>{`
+        *, *::before, *::after {
+          box-sizing: border-box;
+        }
         html, body {
           height: 100%;
           margin: 0;
           overflow: hidden;
           position: fixed;
           width: 100%;
+          overscroll-behavior: none;
+          touch-action: pan-y;
         }
         #root, #__next {
           height: 100%;
@@ -4881,6 +4886,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
         }
         .cupscan-app-root {
           height: 100vh;
+          overscroll-behavior: contain;
         }
         @supports (height: 100dvh) {
           .cupscan-app-root {
