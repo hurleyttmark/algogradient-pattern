@@ -1954,16 +1954,17 @@ const DOMAIN_DEFS_CUP = [
   { id: "sector",       label: "Sector",         desc: "Sector-level momentum from the pulse heatmap — tailwind or headwind for this pattern.",           field: null,                                                                   relatedIds: ["volume", "pulse"] },
 ];
 
-/* Fixed domain definitions — Reverse Head & Shoulders */
+/* Fixed domain definitions — Reverse Head & Shoulders
+   All scores read from detection.radar.* which is always populated for rhs detections */
 const DOMAIN_DEFS_RHS = [
-  { id: "shoulder_sym", label: "Shoulder Sym",   desc: "How symmetrical the two shoulders are in height and distance from the head.",                     field: (d) => d ? (d.shoulderSym ?? d.rimSymmetry ?? 0) : 0,                  relatedIds: ["neckline", "breakout"] },
-  { id: "head_depth",   label: "Head Depth",     desc: "Depth of the head trough relative to the shoulders — ideal range 10-30%.",                        field: (d) => d ? (d.radar?.depthScore ?? d.headDepth ?? 0) : 0,              relatedIds: ["shape_fit", "volume"] },
-  { id: "shape_fit",    label: "Shape Fit",      desc: "How well the overall W-shape conforms to a textbook reverse H&S formation.",                      field: (d) => d ? (d.shapeScore ?? d.areaSymmetry ?? 0) : 0,                  relatedIds: ["head_depth", "neckline"] },
-  { id: "neckline",     label: "Neckline",       desc: "Quality of the neckline — near-horizontal lines score highest; steep slopes reduce conviction.",   field: (d) => d ? (d.necklineScore ?? d.breakoutProx ?? 0) : 0,               relatedIds: ["shoulder_sym", "breakout"] },
-  { id: "breakout",     label: "Breakout Prox",  desc: "How close price is to neckline breakout — the key trigger level for the pattern.",                 field: (d) => d ? d.breakoutProx : 0,                                         relatedIds: ["neckline", "volume"] },
-  { id: "volume",       label: "Vol Surge",      desc: "Volume expansion at neckline breakout — confirms institutional participation.",                    field: (d) => d ? (d.volSurge ?? d.volumeConf ?? 0) : 0,                     relatedIds: ["head_depth", "pulse"] },
-  { id: "pulse",        label: "Momentum",       desc: "Recent candle momentum as price approaches the neckline breakout level.",                          field: (d) => d ? (d.recentMomentum ?? d.pulseBonus ?? 0) : 0,               relatedIds: ["volume", "breakout"] },
-  { id: "sector",       label: "Sector",         desc: "Sector-level momentum from the pulse heatmap — tailwind or headwind for this reversal.",           field: null,                                                                   relatedIds: ["volume", "pulse"] },
+  { id: "shoulder_sym", label: "Shoulder Sym",   desc: "How symmetrical the two shoulders are in height and distance from the head.",  field: (d) => d?.radar?.rimSymmetry  ?? 0, relatedIds: ["neckline", "breakout"] },
+  { id: "head_depth",   label: "Head Depth",     desc: "Depth of the head trough — ideal 10-30%.",                                     field: (d) => d?.radar?.depthScore   ?? 0, relatedIds: ["shape_fit", "volume"] },
+  { id: "shape_fit",    label: "Shape Fit",      desc: "How well the W-shape conforms to textbook reverse H&S.",                       field: (d) => d?.radar?.handleQuality ?? 0, relatedIds: ["head_depth", "neckline"] },
+  { id: "neckline",     label: "Neckline",       desc: "Neckline quality — near-horizontal scores highest.",                           field: (d) => d?.radar?.areaSymmetry  ?? 0, relatedIds: ["shoulder_sym", "breakout"] },
+  { id: "breakout",     label: "Breakout Prox",  desc: "Closeness to neckline breakout trigger.",                                      field: (d) => d?.radar?.breakoutProx  ?? 0, relatedIds: ["neckline", "volume"] },
+  { id: "volume",       label: "Vol Surge",      desc: "Volume expansion confirming the neckline break.",                              field: (d) => d?.radar?.gradConf      ?? 0, relatedIds: ["head_depth", "pulse"] },
+  { id: "pulse",        label: "Momentum",       desc: "Recent candle momentum approaching the neckline.",                             field: (d) => d?.radar?.recentMomentum ?? 0, relatedIds: ["volume", "breakout"] },
+  { id: "sector",       label: "Sector",         desc: "Sector-level momentum — tailwind or headwind for this reversal.",              field: null,                                relatedIds: ["volume", "pulse"] },
 ];
 
 /* Legacy alias */
@@ -2116,7 +2117,7 @@ const DG_CLUSTER_COLORS = ["#7c9fff","#34d399","#f472b6","#fbbf24","#a78bfa","#3
 function dgClusterColor(idx) { return DG_CLUSTER_COLORS[idx % DG_CLUSTER_COLORS.length]; }
 
 /* ── Force-directed SVG Domain Graph ── */
-const SVGDomainGraph = memo(function SVGDomainGraph({ nodes, selectedId, onSelectNode, singularityActive }) {
+const SVGDomainGraph = memo(function SVGDomainGraph({ nodes, selectedId, onSelectNode }) {
   const posRef = useRef({});
   const velRef = useRef({});
   const frameRef = useRef();
@@ -2204,14 +2205,7 @@ const SVGDomainGraph = memo(function SVGDomainGraph({ nodes, selectedId, onSelec
           />
         );
       })}
-      {/* Singularity collapse lines */}
-      {singularityActive && nodes.map(n => {
-        const p = pos[n.id];
-        if (!p) return null;
-        return <line key={"s-"+n.id} x1={p.x} y1={p.y} x2={340} y2={230}
-          stroke="#b39dfa" strokeWidth={1} opacity={0}
-          style={{ animation: "dg-collapse 0.8s ease-out forwards" }} />;
-      })}
+
       {/* Nodes */}
       {nodes.map(n => {
         const p = pos[n.id];
@@ -2228,8 +2222,8 @@ const SVGDomainGraph = memo(function SVGDomainGraph({ nodes, selectedId, onSelec
         return (
           <g key={n.id}
             transform={`translate(${p.x},${p.y})`}
-            onClick={() => !singularityActive && onSelectNode(n)}
-            style={{ cursor: singularityActive ? "default" : "pointer" }}
+            onClick={() => onSelectNode(n)}
+            style={{ cursor: "pointer" }}
           >
             {/* Score fill ring */}
             <circle r={r}
@@ -2272,15 +2266,7 @@ const SVGDomainGraph = memo(function SVGDomainGraph({ nodes, selectedId, onSelec
           </g>
         );
       })}
-      {/* Singularity center node */}
-      {singularityActive && (
-        <g transform="translate(340,230)" style={{ cursor: "default" }}>
-          <circle r={38} fill="rgba(179,157,250,0.15)" stroke="#b39dfa" strokeWidth={2}
-            style={{ animation: "orb-pulse 2s ease-in-out infinite" }} />
-          <text textAnchor="middle" dy="-0.3em" style={{ fill: "#b39dfa", fontSize: 20, pointerEvents: "none" }}>⬡</text>
-          <text textAnchor="middle" dy="1.2em" style={{ fill: "#b39dfa", fontSize: 10, fontWeight: 700, letterSpacing: 1, pointerEvents: "none" }}>SINGULARITY</text>
-        </g>
-      )}
+
     </svg>
   );
 });
@@ -2393,107 +2379,7 @@ function DomainDrawer({ node, allNodes, onClose, isMobile }) {
   );
 }
 
-/* ── Domain Singularity Panel ── */
-function DomainSingularityPanel({ singularity, onClose }) {
-  const taRef = useRef();
-  const [copied, setCopied] = useState(false);
-  if (!singularity) return null;
 
-  function handleCopy() {
-    const el = taRef.current;
-    if (!el) return;
-    el.value = singularity.score != null
-      ? `Setup Singularity · ${singularity.ticker} · Score: ${singularity.score}/100\n${singularity.rationale}`
-      : singularity.rationale;
-    el.style.display = "block";
-    el.focus(); el.select();
-    try { document.execCommand("copy"); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch {}
-    el.style.display = "none";
-  }
-
-  const score = singularity.score;
-  const scoreColor = score == null ? "#7986cb"
-    : score >= 70 ? "#34d399"
-    : score >= 45 ? "#fbbf24"
-    : "#f87171";
-  const scoreLabel = score == null ? "—"
-    : score >= 70 ? "High conviction"
-    : score >= 45 ? "Moderate"
-    : "Low conviction";
-
-  return (
-    <div style={{
-      margin: "0 16px 16px",
-      background: "linear-gradient(135deg,rgba(179,157,250,.06) 0%,rgba(124,159,255,.06) 100%)",
-      border: "1px solid rgba(179,157,250,.25)", borderRadius: 10, padding: 16,
-      position: "relative", overflow: "hidden",
-    }}>
-      <textarea ref={taRef} readOnly aria-hidden="true"
-        style={{ position: "absolute", left: "-9999px", top: 0, width: 1, height: 1, opacity: 0, display: "none" }} />
-      <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".12em", color: "#b39dfa", marginBottom: 12, display: "flex", alignItems: "center", gap: 7 }}>
-        <span style={{ width: 11, height: 11, borderRadius: "50%", background: "#b39dfa", display: "inline-block", boxShadow: "0 0 8px #b39dfa", flexShrink: 0, animation: "orb-pulse 2s ease-in-out infinite" }} />
-        Setup Singularity · {singularity.ticker}
-        <button onClick={onClose} style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", color: "#7986cb", fontSize: 20, lineHeight: 1 }}>×</button>
-      </div>
-      {singularity.loading ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#b39dfa", fontSize: 14 }}>
-          <span style={{
-            display: "inline-block", width: 16, height: 16,
-            border: "2px solid rgba(179,157,250,.2)", borderTopColor: "#b39dfa",
-            borderRadius: "50%", animation: "spin 0.6s linear infinite"
-          }} />
-          Synthesizing domain topology…
-        </div>
-      ) : (
-        <>
-          {/* Score badge row */}
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
-            <svg width={56} height={56} viewBox="0 0 56 56" style={{ flexShrink: 0 }}>
-              <circle cx={28} cy={28} r={22} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={5} />
-              {score != null && (
-                <circle cx={28} cy={28} r={22} fill="none" stroke={scoreColor} strokeWidth={5}
-                  strokeDasharray={`${(score / 100) * 138.2} 138.2`}
-                  strokeDashoffset={34.55}
-                  strokeLinecap="round"
-                />
-              )}
-              <text x={28} y={28} textAnchor="middle" dominantBaseline="middle"
-                style={{ fill: scoreColor, fontFamily: "monospace", fontSize: score != null ? 17 : 13, fontWeight: 800 }}>
-                {score != null ? score : "—"}
-              </text>
-            </svg>
-            <div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: scoreColor, lineHeight: 1 }}>
-                {score != null ? `${score} / 100` : "—"}
-              </div>
-              <div style={{ fontSize: 12, color: scoreColor, fontWeight: 700, marginTop: 4, opacity: 0.9 }}>{scoreLabel}</div>
-              {score != null && (
-                <div style={{ marginTop: 6, height: 4, width: 130, background: "rgba(255,255,255,0.08)", borderRadius: 2, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${score}%`, background: scoreColor, borderRadius: 2 }} />
-                </div>
-              )}
-            </div>
-          </div>
-          {/* Rationale */}
-          <p style={{ fontSize: 13, lineHeight: 1.7, color: "#c5cae9", margin: 0, borderTop: "1px solid rgba(179,157,250,.15)", paddingTop: 12 }}>
-            {singularity.rationale}
-          </p>
-          <button
-            onClick={handleCopy}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-              width: "100%", padding: 12, marginTop: 12, borderRadius: 8,
-              border: `1px solid ${copied ? "#34d399" : "#2a2f45"}`,
-              background: copied ? "rgba(52,211,153,.08)" : "#1a1d27",
-              color: copied ? "#34d399" : "#e8eaf6",
-              fontSize: 13, fontWeight: 700, cursor: "pointer",
-            }}
-          >{copied ? "✓ Copied" : "⎘ Copy"}</button>
-        </>
-      )}
-    </div>
-  );
-}
 
 // ═══════════════════════════════════════════════════════════════
 // END DOMAIN INTELLIGENCE ENGINE
@@ -2545,8 +2431,6 @@ export default function App() {
 
   // ── Domain Intelligence state ──
   const [selectedDomainNode, setSelectedDomainNode] = useState(null);
-  const [domainSingularity, setDomainSingularity] = useState(null);
-  const [domainSingularityLoading, setDomainSingularityLoading] = useState(false);
 
   // ── Mobile responsiveness ──
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 768);
@@ -2564,8 +2448,6 @@ export default function App() {
 
   // ── Reset domain state when ticker changes ──
   useEffect(() => {
-    setDomainSingularity(null);
-    setDomainSingularityLoading(false);
     setSelectedDomainNode(null);
   }, [selectedTicker]);
 
@@ -2841,23 +2723,46 @@ export default function App() {
   const radarData = useMemo(() => {
     if (!selectedDetection?.radar) return [];
     const isRHS = selectedDetection.setupType === "rhs";
-    const labels = isRHS ? RADAR_LABELS_RHS : RADAR_LABELS;
     // Metric sets per chart tab and setup:
     //  • Gradient view → momentum-only signals (geometry irrelevant)
     //  • Cup pattern   → cup geometry + confirmation
     //  • RHS pattern   → reverse-H&S geometry + confirmation
-    let keys;
+    // Each entry: { key: radar field, label: display label }
+    let entries;
     if (chartSubTab === "gradient") {
-      keys = ["gradConf", "pulseStr", "recentMomentum", "breakoutProx", "volumeConf"];
+      entries = [
+        { key: "gradConf",       label: "Gradient" },
+        { key: "pulseStr",       label: "Pulse" },
+        { key: "recentMomentum", label: "Momentum" },
+        { key: "breakoutProx",   label: "Breakout" },
+        { key: "volumeConf",     label: "Volume" },
+      ];
     } else if (isRHS) {
-      // Reverse H&S axes (gradConf here = breakout volume surge)
-      keys = ["rimSymmetry", "areaSymmetry", "spanSymmetry", "depthScore", "handleQuality", "breakoutProx", "volumeConf", "gradConf"];
+      entries = [
+        { key: "rimSymmetry",  label: "Shoulder Sym" },
+        { key: "areaSymmetry", label: "Shape Fit" },
+        { key: "spanSymmetry", label: "Width Sym" },
+        { key: "depthScore",   label: "Head Depth" },
+        { key: "handleQuality",label: "U/V Shape" },
+        { key: "breakoutProx", label: "Brk Prox" },
+        { key: "volumeConf",   label: "Volume" },
+        { key: "gradConf",     label: "Brk Vol" },
+      ];
     } else {
-      keys = ["rimSymmetry", "areaSymmetry", "spanSymmetry", "depthScore", "handleQuality", "breakoutProx", "volumeConf", "gradConf"];
+      entries = [
+        { key: "rimSymmetry",  label: "Rim Sym" },
+        { key: "areaSymmetry", label: "Area Sym" },
+        { key: "spanSymmetry", label: "Span Sym" },
+        { key: "depthScore",   label: "Depth" },
+        { key: "handleQuality",label: "Handle" },
+        { key: "breakoutProx", label: "Breakout" },
+        { key: "volumeConf",   label: "Volume" },
+        { key: "gradConf",     label: "Gradient" },
+      ];
     }
-    return keys.map(k => ({
-      metric: labels[k],
-      value: Math.round((selectedDetection.radar[k] || 0) * 100)
+    return entries.map(({ key, label }) => ({
+      metric: label,
+      value: Math.round((selectedDetection.radar[key] || 0) * 100)
     }));
   }, [selectedDetection, chartSubTab]);
 
@@ -3096,85 +3001,6 @@ export default function App() {
     URL.revokeObjectURL(url);
   }, [hmData]);
 
-  // ── Domain Singularity ──
-  const handleDomainSingularize = useCallback(async () => {
-    if (!selectedTicker || !selectedDetection) return;
-    setDomainSingularity({ loading: true, ticker: selectedTicker, score: null, rationale: "" });
-    setDomainSingularityLoading(true);
-
-    const sectorPulse = hmData.find(d => d.ticker === selectedTicker)?.total ?? null;
-    const tickerRows = rawData ? (rawData.get(selectedTicker) || []) : [];
-    const patternBarsFromEnd = tickerRows.length - 1 - selectedDetection.rightRim;
-    const recencyMult = computeRecencyMultiplier(patternBarsFromEnd, tickerRows.length);
-    const domainNodes = buildDomainNodes(selectedDetection, sectorPulse, recencyMult);
-    const { degree, edgeList, cohesionScore } = analyzeDomainGraph(domainNodes);
-
-    const byDegree = [...domainNodes].sort((a, b) => (degree[b.id] || 0) - (degree[a.id] || 0));
-    const hubs = byDegree.slice(0, 3).map(n =>
-      `${n.label} (score: ${Math.round(n.score * 100)}, degree: ${degree[n.id]})`
-    ).join(", ");
-    const bridges = edgeList.filter(e => e.isBridge).map(e => {
-      const a = domainNodes.find(n => n.id === e.from)?.label;
-      const b = domainNodes.find(n => n.id === e.to)?.label;
-      return `${a} ↔ ${b}`;
-    }).join(", ") || "none";
-    const domainLines = domainNodes.map(n => {
-      const conf = cohesionScore[n.id] ?? 0.5;
-      const quad = domainQuadrant(conf, n.score);
-      return `  • ${n.label}: score=${Math.round(n.score * 100)}, cohesion=${Math.round(conf * 100)}, diagnosis=${quad.label}`;
-    }).join("\n");
-
-    // Describe recency context for the AI
-    const recencyPct = Math.round(recencyMult * 100);
-    const ageBars = patternBarsFromEnd;
-    const recencyNote = ageBars <= 10
-      ? `The pattern completed very recently (${ageBars} bars ago) — full recency weight applied.`
-      : ageBars <= 60
-        ? `The pattern completed ${ageBars} bars ago — moderately fresh, recency weight ${recencyPct}%.`
-        : `The pattern completed ${ageBars} bars ago — historical setup with recency weight ${recencyPct}%. Pattern dimensions (except Pulse/Sector momentum) have been discounted accordingly.`;
-
-    const prompt = `You are a trading pattern analyst. You have a domain topology analysis for the ticker ${selectedTicker} showing how 7 cup-and-handle pattern dimensions score and relate to each other.
-
-RECENCY CONTEXT: ${recencyNote}
-GRAPH HUBS (most connected domains): ${hubs}
-BRIDGE DOMAINS (cross-cluster links): ${bridges}
-DOMAIN BREAKDOWN (scores already recency-adjusted except Pulse/Sector):
-${domainLines}
-
-Your task: synthesize a "setup singularity" score and rationale for ${selectedTicker}.
-
-IMPORTANT: Current momentum (Pulse / Sector) carries the most weight in your assessment. A strong current pulse can elevate conviction even if the pattern structure is aging. Conversely, weak momentum undermines even a well-formed historical setup.
-
-Respond ONLY with a valid JSON object, no markdown, no extra text:
-{"score": <integer 0-100>, "rationale": "<one to two sentences of plain prose>"}
-
-Where score represents overall setup conviction (0=no edge, 100=textbook setup firing now).`;
-
-    try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
-      const data = await res.json();
-      const raw = data.content?.map(c => c.text || "").join("").trim() || "{}";
-      let score = null, rationale = "Could not synthesize a singularity.";
-      try {
-        const clean = raw.replace(/```json|```/g, "").trim();
-        const parsed = JSON.parse(clean);
-        score = typeof parsed.score === "number" ? Math.max(0, Math.min(100, Math.round(parsed.score))) : null;
-        rationale = parsed.rationale || rationale;
-      } catch { rationale = raw; }
-      setDomainSingularity({ loading: false, ticker: selectedTicker, score, rationale });
-    } catch (e) {
-      setDomainSingularity({ loading: false, ticker: selectedTicker, score: null, rationale: "Synthesis failed: " + e.message });
-    }
-    setDomainSingularityLoading(false);
-  }, [selectedTicker, selectedDetection, hmData, rawData]);
 
   // ── Dynamic colors based on darkMode (shadows module-level COLORS inside component) ──
   // eslint-disable-next-line no-shadow
@@ -3201,10 +3027,10 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
   const S = {
     app: {
       background: COLORS.bg, color: COLORS.text,
-      minHeight: "100vh",
+      height: "100%",
       fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
       display: "flex", flexDirection: "column", fontSize: 14,
-      overflow: isMobile ? "visible" : "hidden",
+      overflow: "hidden",
       width: "100%", maxWidth: "100vw",
       boxSizing: "border-box",
     },
@@ -3215,14 +3041,14 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
     },
     logo: { fontSize: 17, fontWeight: 800, color: COLORS.accent, letterSpacing: "-0.5px", whiteSpace: "nowrap" },
     logoSub: { fontSize: 11, color: COLORS.textMuted, marginLeft: 8 },
-    main: { display: "flex", flex: 1, minHeight: 0, overflow: isMobile ? "visible" : "hidden", flexDirection: isMobile ? "column" : "row" },
+    main: { display: "flex", flex: 1, minHeight: 0, overflow: "hidden", flexDirection: isMobile ? "column" : "row" },
     sidebar: isMobile ? { display: "none" } : {
       width: 272, flexShrink: 0, background: COLORS.surface,
       borderRight: `1px solid ${COLORS.border}`,
       display: "flex", flexDirection: "column", overflow: "hidden"
     },
     sidebarScroll: { flex: 1, overflowY: "auto", padding: 14 },
-    content: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden" },
+    content: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" },
     tabBar: {
       display: isMobile ? "none" : "flex", borderBottom: `1px solid ${COLORS.border}`,
       background: COLORS.surface, flexShrink: 0, padding: "0 4px"
@@ -3234,7 +3060,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       cursor: "pointer", background: "none", border: "none",
       outline: "none", transition: "color 0.15s", whiteSpace: "nowrap"
     }),
-    panel: { flex: 1, overflow: isMobile ? "visible" : "auto", minHeight: isMobile ? "auto" : 0, minWidth: 0, paddingBottom: isMobile ? 80 : 0, overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" },
+    panel: { flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, minWidth: 0, paddingBottom: isMobile ? 80 : 0, overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" },
     card: {
       background: COLORS.surfaceHover, border: `1px solid ${COLORS.border}`,
       borderRadius: 10, padding: 14, marginBottom: 10
@@ -3869,15 +3695,17 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
     const yMax = Math.max(...chartData.map(d => d.high)) * 1.02;
 
     // Sample every N ticks for x-axis labels to avoid crowding
+    // On mobile use far fewer labels (4) since screen is narrow
     const totalBars = chartData.length;
-    const labelStep = Math.max(1, Math.floor(totalBars / 8));
+    const labelCount = isMobile ? 4 : 8;
+    const labelStep = Math.max(1, Math.floor(totalBars / labelCount));
 
     const xTicks = chartData
       .filter((_, i) => i % labelStep === 0)
       .map(d => d.idx);
 
     return (
-      <div style={{ height: isMobile ? "auto" : "100%", minHeight: isMobile ? 0 : undefined, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden" }}>
+      <div style={{ display: "flex", flexDirection: "column", minHeight: isMobile ? "auto" : "100%" }}>
         {/* Ticker header */}
         <div style={{
           padding: isMobile ? "10px 12px" : "12px 20px", borderBottom: `1px solid ${COLORS.border}`,
@@ -4041,9 +3869,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           </div>
         </div>
 
-        <div style={isMobile
-          ? { padding: chartSubTab === "gradient" ? "8px 0 0" : "16px 12px 8px", display: "flex", flexDirection: "column", gap: 12 }
-          : { flex: 1, minHeight: 0, padding: chartSubTab === "gradient" ? "8px 0 0" : "16px 12px 8px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ padding: chartSubTab === "gradient" ? "8px 0 0" : "16px 12px 8px", display: "flex", flexDirection: "column", gap: 12 }}>
 
           {/* ── Momentum Gradient view: canvas-based CandlePulse chart ── */}
           {chartSubTab === "gradient" && (
@@ -4078,7 +3904,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                 </div>
               </div>
               {/* Canvas chart fills remainder */}
-              <div style={isMobile ? { height: 380, padding: "12px 16px 8px", boxSizing: "border-box" } : { flex: 1, minHeight: 0, padding: "12px 16px 8px" }}>
+              <div style={{ height: isMobile ? 360 : 420, padding: "12px 16px 8px", boxSizing: "border-box" }}>
                 <PulseChart data={chartData} />
               </div>
             </>
@@ -4086,10 +3912,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
 
           {/* ── Cup & Handle view: Recharts ── */}
           {chartSubTab === "pattern" && (
-            <div key={`pattern-${selectedTicker}`} style={isMobile
-              ? { display: "flex", flexDirection: "column", gap: 12 }
-              : { display: "flex", flexDirection: "column", gap: 12, flex: 1, minHeight: 0 }}>
-              <div style={isMobile ? { height: 320 } : { flex: 3, minHeight: 0 }}>
+            <div key={`pattern-${selectedTicker}`} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ height: isMobile ? 320 : 360 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
                     <CartesianGrid stroke={COLORS.border} strokeDasharray="2 4" vertical={false} />
@@ -4197,7 +4021,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               </div>
 
               {/* Volume bars */}
-              <div style={isMobile ? { height: 80 } : { flex: 1, minHeight: 0, maxHeight: 80 }}>
+              <div style={{ height: 80 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 0, right: 16, bottom: 0, left: 8 }}>
                     <XAxis dataKey="idx" hide />
@@ -4219,50 +4043,76 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           )}
         </div>
 
-        {/* Radar + metric cards */}
-        {det && radarData.length > 0 && (
+        {/* Metric cards — radar only for pattern views; gradient view gets stat strip */}
+        {det && chartSubTab !== "gradient" && radarData.length > 0 && (
           <div style={{
             borderTop: `1px solid ${COLORS.border}`, padding: "12px 16px",
             display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 18, flexShrink: 0,
             background: COLORS.surface, flexDirection: isMobile ? "column" : "row"
           }}>
-            <div style={{ width: isMobile ? "100%" : 190, height: 168, flexShrink: 0, display: "flex", justifyContent: "center" }}>
-              <RadarChart width={190} height={168} data={radarData}>
+            <div style={{ width: isMobile ? "100%" : 210, height: 190, flexShrink: 0, display: "flex", justifyContent: "center" }}>
+              <RadarChart width={210} height={190} data={radarData} outerRadius={58} margin={{ top: 10, right: 10, bottom: 10, left: 10 }}>
                 <PolarGrid stroke={COLORS.border} />
-                <PolarAngleAxis dataKey="metric" tick={{ fill: COLORS.textDim, fontSize: 11, fontWeight: 600 }} />
+                <PolarAngleAxis dataKey="metric" tick={{ fill: COLORS.textDim, fontSize: 10, fontWeight: 600 }} />
                 <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
                 <Radar dataKey="value" stroke={COLORS.accent} fill={COLORS.accent} fillOpacity={0.28} />
               </RadarChart>
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{
-                fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".08em",
-                color: COLORS.textDim, marginBottom: 8
-              }}>
-                {chartSubTab === "gradient"
-                  ? "Momentum signals"
-                  : det?.setupType === "rhs" ? "Reverse H&S structure" : "Cup & Handle structure"}
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".08em", color: COLORS.textDim, marginBottom: 8 }}>
+                {det?.setupType === "rhs" ? "Reverse H&S structure" : "Cup & Handle structure"}
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {radarData.map(({ metric, value }) => (
-                  <div key={metric} style={{
-                    flex: "1 1 104px", background: COLORS.surfaceHover,
-                    border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 11px"
-                  }}>
-                    <div style={{ fontSize: 11, color: COLORS.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.4px" }}>{metric}</div>
-                    <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2, color: value >= 70 ? COLORS.green : value >= 50 ? COLORS.gold : COLORS.text }}>
-                      {value}
-                    </div>
-                    <div style={{
-                      height: 4, borderRadius: 2, marginTop: 5,
-                      background: `linear-gradient(90deg, ${value >= 70 ? COLORS.green : value >= 50 ? COLORS.gold : COLORS.accent} ${value}%, ${COLORS.border} ${value}%)`
-                    }} />
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {radarData.map(({ metric, value }, idx) => (
+                  <div key={idx} style={{ flex: "1 1 90px", minWidth: 80, background: COLORS.surfaceHover, border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "7px 10px" }}>
+                    <div style={{ fontSize: 10, color: COLORS.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{metric}</div>
+                    <div style={{ fontSize: 17, fontWeight: 800, marginTop: 2, color: value >= 70 ? COLORS.green : value >= 50 ? COLORS.gold : COLORS.text }}>{value}</div>
+                    <div style={{ height: 3, borderRadius: 2, marginTop: 4, background: `linear-gradient(90deg, ${value >= 70 ? COLORS.green : value >= 50 ? COLORS.gold : COLORS.accent} ${value}%, ${COLORS.border} ${value}%)` }} />
                   </div>
                 ))}
               </div>
             </div>
           </div>
         )}
+        {/* Gradient view — show current gradient score as a clean stat, no radar */}
+        {det && chartSubTab === "gradient" && (() => {
+          const gradVal = Math.round((det.gradConf ?? 0) * 100);
+          const momVal  = Math.round((det.recentMomentum ?? 0.5) * 100);
+          const brkVal  = Math.round((det.breakoutProx ?? 0) * 100);
+          const volVal  = Math.round(((det.radar?.volumeConf ?? det.volumeConf) ?? 0) * 100);
+          const pulseVal = Math.round((det.pulseBonus ?? 0) * 100);
+          const stats = [
+            { label: "Gradient Score", value: gradVal, desc: "20-bar momentum gradient — how cleanly price is trending" },
+            { label: "Recent Momentum", value: momVal, desc: "10-bar candle momentum (bull vs bear ratio)" },
+            { label: "Breakout Prox", value: brkVal, desc: "Closeness to breakout pivot level" },
+            { label: "Volume Conf", value: volVal, desc: "Volume expansion confirming the move" },
+            { label: "Pulse / Streak", value: pulseVal, desc: "Consecutive bullish candle streak bonus" },
+          ];
+          return (
+            <div style={{ borderTop: `1px solid ${COLORS.border}`, padding: "14px 16px", background: COLORS.surface, flexShrink: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".08em", color: COLORS.textDim, marginBottom: 10 }}>
+                Current Momentum Readings
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {stats.map(({ label, value, desc }) => {
+                  const color = value >= 70 ? COLORS.green : value >= 50 ? COLORS.gold : value >= 30 ? COLORS.textDim : COLORS.red;
+                  return (
+                    <div key={label} title={desc} style={{ flex: "1 1 100px", minWidth: 90, background: COLORS.surfaceHover, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: "10px 12px" }}>
+                      <div style={{ fontSize: 10, color: COLORS.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.4px", marginBottom: 4 }}>{label}</div>
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                        <span style={{ fontSize: 22, fontWeight: 900, color, lineHeight: 1 }}>{value}</span>
+                        <span style={{ fontSize: 11, color: COLORS.textMuted }}>/100</span>
+                      </div>
+                      <div style={{ height: 4, borderRadius: 2, marginTop: 6, background: COLORS.border, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${value}%`, background: color, borderRadius: 2, transition: "width 0.4s" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
       </div>
     );
   };
@@ -4714,8 +4564,6 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
     const recencyMult = computeRecencyMultiplier(patternBarsFromEnd, tickerRows.length);
     const domainNodes = (!noTicker && !noDet) ? buildDomainNodes(selectedDetection, sectorPulse, recencyMult) : [];
     const { cohesionScore } = domainNodes.length ? analyzeDomainGraph(domainNodes) : { cohesionScore: {} };
-    const singularityActive = !!(domainSingularity && !domainSingularity.loading);
-
     const confirmed = domainNodes.filter(n => { const c = cohesionScore[n.id] ?? 0.5; return c >= 0.5 && n.score >= 0.5; }).length;
     const gapRisk   = domainNodes.filter(n => { const c = cohesionScore[n.id] ?? 0.5; return c >= 0.5 && n.score < 0.5; }).length;
     const drags     = domainNodes.filter(n => { const c = cohesionScore[n.id] ?? 0.5; return c < 0.5 && n.score < 0.5; }).length;
@@ -4730,9 +4578,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
     return (
       <div style={{ height: isMobile ? "auto" : "100%", minHeight: isMobile ? "85vh" : undefined, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden", background: "#0b0d11" }}>
         <style>{`
-          @keyframes orb-pulse { 0%,100%{box-shadow:0 0 6px #b39dfa;opacity:1} 50%{box-shadow:0 0 16px #b39dfa;opacity:.7} }
-          @keyframes spin { to{transform:rotate(360deg)} }
-          @keyframes dg-collapse { 0%{opacity:0;stroke-dashoffset:60} 100%{opacity:.3;stroke-dashoffset:0} }
+
         `}</style>
 
         {/* Header bar */}
@@ -4802,23 +4648,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                 <span>bridge</span>
               </div>
             )}
-            {domainNodes.length > 0 && (
-              <button
-                onClick={() => { setSelectedDomainNode(null); handleDomainSingularize(); }}
-                disabled={domainSingularityLoading}
-                style={{
-                  display: "flex", alignItems: "center", gap: 8, padding: "10px 18px",
-                  borderRadius: 9, border: "1px solid rgba(179,157,250,.45)",
-                  background: "rgba(179,157,250,.12)", color: "#b39dfa",
-                  fontSize: 14, fontWeight: 800, cursor: domainSingularityLoading ? "not-allowed" : "pointer",
-                  opacity: domainSingularityLoading ? 0.5 : 1, whiteSpace: "nowrap",
-                }}
-              >
-                {domainSingularityLoading
-                  ? <><span style={{ display: "inline-block", width: 14, height: 14, border: "2px solid rgba(179,157,250,.2)", borderTopColor: "#b39dfa", borderRadius: "50%", animation: "spin .6s linear infinite" }} />Distilling…</>
-                  : "⬡ Singularity"}
-              </button>
-            )}
+
           </div>
         </div>
 
@@ -4860,19 +4690,12 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                   nodes={domainNodes}
                   selectedId={selectedDomainNode?.id}
                   onSelectNode={setSelectedDomainNode}
-                  singularityActive={singularityActive}
                 />
               </div>
-              {/* Singularity panel */}
-              {domainSingularity && (
-                <DomainSingularityPanel
-                  singularity={domainSingularity}
-                  onClose={() => { setDomainSingularity(null); setDomainSingularityLoading(false); }}
-                />
-              )}
+
             </div>
             {/* Node detail drawer */}
-            {selectedDomainNode && !singularityActive && (
+            {selectedDomainNode && (
               <DomainDrawer
                 node={selectedDomainNode}
                 allNodes={domainNodes}
@@ -4894,42 +4717,12 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           box-sizing: border-box;
         }
         html, body {
-          height: 100%;
-          margin: 0;
-          overflow: hidden;
-          width: 100%;
-          overscroll-behavior: none;
+          height: 100%; margin: 0; overflow: hidden;
+          width: 100%; overscroll-behavior: none;
         }
-        #root, #__next {
-          height: 100%;
-          overflow: hidden;
-        }
-        .cupscan-app-root {
-          height: 100vh;
-          overscroll-behavior: contain;
-        }
-        @supports (height: 100dvh) {
-          .cupscan-app-root {
-            height: 100dvh;
-          }
-        }
-        /* Mobile: let the panel scroll freely */
-        @media (max-width: 768px) {
-          html, body {
-            overflow: auto;
-            height: auto;
-            min-height: 100%;
-          }
-          #root, #__next {
-            height: auto;
-            overflow: visible;
-          }
-          .cupscan-app-root {
-            height: auto;
-            min-height: 100dvh;
-            overflow: visible;
-          }
-        }
+        #root, #__next { height: 100%; overflow: hidden; }
+        .cupscan-app-root { height: 100vh; overflow: hidden; }
+        @supports (height: 100dvh) { .cupscan-app-root { height: 100dvh; } }
       `}</style>
       {/* Header */}
       <div style={S.header}>
