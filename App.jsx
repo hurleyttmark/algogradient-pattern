@@ -2487,10 +2487,10 @@ export default function App() {
   const [scanProgress, setScanProgress] = useState(0);
   const [parseWarnings, setParseWarnings] = useState([]);
   const [showWarnings, setShowWarnings] = useState(false);
-  const [chatMessages, setChatMessages] = useState([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const [chatError, setChatError] = useState(null);
+
+
+
+
   const [activeTab, setActiveTab] = useState("leaderboard");
   const [chartSubTab, setChartSubTab] = useState("pattern");
   const [chartSetup, setChartSetup] = useState(null); // null = follow active setup; "cup"|"rhs" = chart override
@@ -2505,7 +2505,6 @@ export default function App() {
 
   // ── Sector classification state ──
   const [sectorMap, setSectorMap] = useState({});         // ticker → sector string
-  const [sectorClassifying, setSectorClassifying] = useState(false);
   const [hmSectorFilter, setHmSectorFilter] = useState("All"); // "All" | sector name
   const sectorCacheRef = useRef({});                      // persists across re-renders
 
@@ -2521,17 +2520,65 @@ export default function App() {
   const [domainSingularityLoading, setDomainSingularityLoading] = useState(false);
 
   const cancelRef = useRef(false);
-  const chatAbortRef = useRef(null);
+
   const scanStartRef = useRef(null);
   const listRef = useRef(null);
-  const chatEndRef = useRef(null);
 
   // ── Reset domain state when ticker changes ──
   useEffect(() => {
     setDomainSingularity(null);
     setDomainSingularityLoading(false);
     setSelectedDomainNode(null);
-  }, [selectedTicker]);
+
+  // ── Auto-load bundled default CSV on startup ──
+  useEffect(() => {
+    const loadDefault = async () => {
+      try {
+        setScanStatus("scanning");
+        setScanError(null);
+        setScanProgress(0);
+        setScores([]);
+        setAllScores([]);
+        setSelectedTicker(null);
+        cancelRef.current = false;
+
+        const res = await fetch("/ohlcv_data_fixed.csv");
+        if (!res.ok) throw new Error("Default data not found");
+
+        const text = await res.text();
+        const blob = new Blob([text], { type: "text/csv" });
+        const file = new File([blob], "ohlcv_data_fixed.csv", { type: "text/csv" });
+
+        const parsed = await parseCSV(file);
+        setRawData(parsed.map);
+        setParseWarnings(parsed.warnings);
+
+        if (parsed.map.size === 0) {
+          setScanStatus("error");
+          setScanError("Default data loaded but no valid tickers found.");
+          return;
+        }
+
+        const results = await runScan(parsed.map, tolerance, setScanProgress, cancelRef, windowMode);
+        if (!cancelRef.current) {
+          setAllScores(results);
+          setScores(results);
+          setScanStatus("done");
+          setScanProgress(100);
+          if (results.length > 0) {
+            setSelectedTicker(results[0].ticker);
+            setActiveTab("chart");
+          }
+        }
+      } catch (err) {
+        // Silently fall back to manual upload if default data fails
+        setScanStatus("idle");
+        setScanError(null);
+      }
+    };
+    loadDefault();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount
 
   // ── Elapsed timer ──
   useEffect(() => {
@@ -2541,10 +2588,6 @@ export default function App() {
     return () => clearInterval(id);
   }, [scanStatus]);
 
-  // ── Scroll chat to bottom ──
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages, chatLoading]);
 
   // ── Sector classification: static lookup + AI batch fallback ──
   useEffect(() => {
@@ -2566,48 +2609,10 @@ export default function App() {
     setSectorMap(prev => ({ ...prev, ...resolved }));
 
     if (unknown.length === 0) return;
-
-    // Step 2: AI batch fallback for unknowns not in cache
-    const toClassify = unknown.filter(t => !sectorCacheRef.current[t]);
-    if (toClassify.length === 0) return;
-
-    setSectorClassifying(true);
-    const BATCH = 25;
-    const batches = [];
-    for (let i = 0; i < toClassify.length; i += BATCH) {
-      batches.push(toClassify.slice(i, i + BATCH));
-    }
-
-    (async () => {
-      const aiResolved = {};
-      for (const batch of batches) {
-        try {
-          const res = await fetch(AI_ENDPOINT, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: AI_MODEL,
-              max_tokens: 1000,
-              system: `You are a financial data assistant. Classify each ticker into exactly one GICS sector from this list: ${GICS_SECTORS.join(", ")}. If unknown or an ETF, use "ETF/Other". Return ONLY a valid JSON object mapping ticker to sector, no markdown, no explanation.`,
-              messages: [{ role: "user", content: `Classify these tickers: ${batch.join(", ")}` }]
-            })
-          });
-          if (!res.ok) continue;
-          const data = await res.json();
-          const text = data.content?.[0]?.text || "{}";
-          const clean = text.replace(/```json|```/g, "").trim();
-          const parsed = JSON.parse(clean);
-          for (const [t, s] of Object.entries(parsed)) {
-            if (GICS_SECTORS.includes(s)) {
-              aiResolved[t] = s;
-              sectorCacheRef.current[t] = s;
-            }
-          }
-        } catch { /* skip failed batches */ }
-      }
-      setSectorMap(prev => ({ ...prev, ...aiResolved }));
-      setSectorClassifying(false);
-    })();
+    // Unknown tickers default to ETF/Other
+    const fallback = {};
+    unknown.forEach(t => { fallback[t] = "ETF/Other"; sectorCacheRef.current[t] = "ETF/Other"; });
+    setSectorMap(prev => ({ ...prev, ...fallback }));
   }, [rawData]);
 
   // The detected setup for the selected ticker (cup or flag per tolerance.activeSetup).
@@ -2841,7 +2846,6 @@ export default function App() {
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
       if (e.key === "h" || e.key === "H") { setActiveTab("heatmap"); return; }
       if (e.key === "l" || e.key === "L") { setActiveTab("leaderboard"); return; }
-      if (e.key === "a" || e.key === "A") { setActiveTab("chat"); return; }
       if (e.key === "d" || e.key === "D") { setActiveTab("domain"); return; }
       if ((e.key === "j" || e.key === "k") && filteredScores.length > 0) {
         setSelectedTicker(prev => {
@@ -2993,89 +2997,6 @@ export default function App() {
     return sorted; // [[sectorName, [tickers...]], ...]
   }, [hmData]);
 
-  // ── Chat ──
-  const handleChat = useCallback(async () => {
-    if (!chatInput.trim() || chatLoading) return;
-    const userContent = chatInput.trim();
-    const userMsg = { role: "user", content: userContent };
-
-    const hmContext = hmData.length > 0
-      ? ` Heatmap pulse scores (top 10 by momentum): ${hmData.slice(0, 10).map(d => `${d.ticker} ${d.total >= 0 ? "+" : ""}${(d.total * 100).toFixed(0)}`).join(", ")}. Sector averages: ${hmBySector.slice(0, 5).map(([sec, tickers]) => { const avg = tickers.reduce((a, d) => a + d.total, 0) / tickers.length; return `${sec} ${avg >= 0 ? "+" : ""}${(avg * 100).toFixed(0)}`; }).join(", ")}.`
-      : "";
-
-    // ── Rich per-ticker context (parity with the Singularity feature) ──
-    let detailNote = "";
-    if (selectedDetection && selectedTicker) {
-      const d = selectedDetection;
-      const tickerRows = rawData ? (rawData.get(selectedTicker) || []) : [];
-      const barsFromEnd = tickerRows.length - 1 - d.rightRim;
-      const recencyMult = computeRecencyMultiplier(barsFromEnd, tickerRows.length);
-      const recencyPct = Math.round(recencyMult * 100);
-      const sectorPulse = hmData.find(h => h.ticker === selectedTicker)?.total ?? null;
-
-      // Recency framing — mirrors the Singularity handler's language
-      const recencyDesc = barsFromEnd <= 10
-        ? `pattern completed very recently (${barsFromEnd} bars ago), full recency weight`
-        : barsFromEnd <= 60
-          ? `pattern completed ${barsFromEnd} bars ago, moderately fresh (recency weight ${recencyPct}%)`
-          : `historical pattern, completed ${barsFromEnd} bars ago (recency weight ${recencyPct}% — structural dimensions discounted, but current Pulse/Sector momentum are not)`;
-
-      const pct = (v) => `${(v * 100).toFixed(0)}%`;
-      const setupName = d.setupType === "rhs" ? "Reverse Head & Shoulders" : "Cup & Handle";
-      const geomNote = d.setupType === "rhs"
-        ? `head depth ${pct(d.headDepth)} below shoulders (10–30% ideal), shoulder symmetry ${pct(d.shoulderSym)}, width symmetry ${pct(d.widthSym)}, neckline quality ${pct(d.necklineScore)}, shape U/V score ${pct(d.shapeScore)}, volume profile ${pct(d.volConf)}, breakout volume surge ${pct(d.volSurge)}`
-        : `cup depth ${pct(d.cupDepth)}, handle retrace ${pct(d.handleRetrace)}, area symmetry ${pct(d.areaSymmetry)}, span symmetry ${pct(d.spanSymmetry)}, gradient conformance ${pct(d.gradConf)}, pulse streak ${d.handleStreakVal > 0 ? "+" : ""}${d.handleStreakVal}`;
-      detailNote =
-        ` Detected setup: ${setupName}. Full signal breakdown for ${selectedTicker}: ` +
-        `overall score ${pct(d.score)}, ${geomNote}, ` +
-        `breakout proximity ${pct(d.breakoutProx)}${d.triggered ? " (ALREADY BROKE OUT above trigger)" : ""}, ` +
-        `recent momentum ${pct(d.recentMomentum)}. ` +
-        `Recency: ${recencyDesc}.` +
-        (sectorPulse != null ? ` Sector momentum: ${sectorPulse >= 0 ? "+" : ""}${(sectorPulse * 100).toFixed(0)}.` : "") +
-        ` NOTE: current momentum (Pulse/Sector) should weigh most heavily — strong current momentum can elevate conviction even on an aging structure, and weak momentum undermines an otherwise textbook setup.`;
-    }
-
-    // Inject the Singularity verdict if one has been computed for this ticker
-    let singularityNote = "";
-    if (domainSingularity && !domainSingularity.loading
-        && domainSingularity.ticker === selectedTicker && domainSingularity.score != null) {
-      singularityNote = ` A Setup Singularity has already been synthesized for ${selectedTicker}: score ${domainSingularity.score}/100. Rationale: "${domainSingularity.rationale}" You may reference, build on, or respectfully challenge this verdict.`;
-    }
-
-    const contextNote = scores.length > 0
-      ? `[Scan context: ${scores.length} tickers matched. Top 5: ${scores.slice(0, 5).map(s => `${s.ticker} (${(s.score * 100).toFixed(0)}%)`).join(", ")}. Currently viewing: ${selectedTicker || "none"}.${detailNote}${singularityNote}${hmContext}]`
-      : "[No scan results yet.]";
-
-    const apiMessages = [
-      ...chatMessages,
-      { role: "user", content: `${contextNote}\n\n${userContent}` }
-    ];
-
-    setChatMessages(prev => [...prev, userMsg]);
-    setChatInput("");
-    setChatLoading(true);
-    setChatError(null);
-
-    const controller = new AbortController();
-    chatAbortRef.current = controller;
-    const timer = setTimeout(() => controller.abort(), 30000);
-
-    try {
-      const reply = await callAI(apiMessages, controller.signal);
-      setChatMessages(prev => [...prev, { role: "assistant", content: reply }]);
-    } catch (err) {
-      setChatError(err.message);
-    } finally {
-      clearTimeout(timer);
-      setChatLoading(false);
-      chatAbortRef.current = null;
-    }
-  }, [chatInput, chatLoading, chatMessages, scores, selectedTicker, selectedDetection, hmData, hmBySector, rawData, domainSingularity]);
-
-  const cancelChat = useCallback(() => {
-    chatAbortRef.current?.abort();
-    setChatLoading(false);
-  }, []);
 
   const cancelScan = useCallback(() => {
     cancelRef.current = true;
@@ -3326,20 +3247,28 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
   const renderUpload = () => (
     <div style={S.card}>
       <div style={S.sectionTitle}>Data Source</div>
+      {(scanStatus === "idle" || scanStatus === "done") && rawData && (
+        <div style={{
+          padding: "8px 12px", borderRadius: 8, marginBottom: 10,
+          background: "rgba(38,166,154,0.1)", border: "1px solid rgba(38,166,154,0.3)",
+          fontSize: 11, color: COLORS.green, lineHeight: 1.5
+        }}>
+          ✓ Default dataset loaded ({rawData.size} tickers)
+        </div>
+      )}
       <label
-        style={S.uploadZone(dragging)}
+        style={{ ...S.uploadZone(dragging), padding: "12px 10px" }}
         htmlFor="csv-upload"
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={e => { setDragging(false); handleDrop(e); }}
       >
-        <div style={{ fontSize: 26, marginBottom: 8 }}>📊</div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: COLORS.text, marginBottom: 4 }}>
-          Drop CSV or click to browse
+        <div style={{ fontSize: 18, marginBottom: 4 }}>📂</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: COLORS.textDim, marginBottom: 2 }}>
+          Upload your own CSV
         </div>
-        <div style={{ fontSize: 11, color: COLORS.textMuted, lineHeight: 1.6 }}>
-          Required: date · ticker · open · high · low · close · volume<br />
-          Max {MAX_FILE_MB} MB · UTF-8 encoding
+        <div style={{ fontSize: 10, color: COLORS.textMuted, lineHeight: 1.5 }}>
+          date · ticker · open · high · low · close · volume
         </div>
         <input
           id="csv-upload" type="file" accept=".csv" style={{ display: "none" }}
@@ -4276,101 +4205,6 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
   };
 
   // ─── Chat tab ─────────────────────────────────────────────────────────────────
-  const renderChat = () => (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      {/* Messages */}
-      <div style={{
-        flex: 1, overflowY: "auto", padding: "16px 20px",
-        display: "flex", flexDirection: "column", gap: 12
-      }}>
-        {chatMessages.length === 0 && (
-          <div style={{ textAlign: "center", color: COLORS.textMuted, marginTop: 40 }}>
-            <div style={{ fontSize: 32, marginBottom: 12 }}>🤖</div>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Pattern Analysis Assistant</div>
-            <div style={{ fontSize: 12, lineHeight: 1.7, maxWidth: 360, margin: "0 auto" }}>
-              Ask about cup-and-handle patterns, how to interpret scores, what parameters to adjust, or why a specific ticker ranks where it does.
-            </div>
-            <div style={{ marginTop: 20, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
-              {[
-                "What makes a good cup-and-handle pattern?",
-                "Why might my top ticker score high?",
-                "How should I adjust the smoothing parameter?",
-                "Which tickers in my scan look close to breaking out?",
-                "What does the pulse heatmap tell me about sector momentum?",
-              ].map(q => (
-                <button
-                  key={q}
-                  style={{
-                    ...S.btn("secondary"), fontSize: 11, padding: "6px 12px",
-                    color: COLORS.textDim, background: COLORS.surfaceHover,
-                    border: `1px solid ${COLORS.border}`, borderRadius: 20
-                  }}
-                  onClick={() => setChatInput(q)}
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {chatMessages.map((msg, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
-            <div style={S.chatBubble(msg.role)}>{msg.content}</div>
-          </div>
-        ))}
-
-        {chatLoading && (
-          <div style={{ display: "flex", justifyContent: "flex-start" }}>
-            <div style={{ ...S.chatBubble("assistant"), display: "flex", gap: 4, alignItems: "center" }}>
-              {[0, 1, 2].map(i => (
-                <div key={i} style={{
-                  width: 6, height: 6, borderRadius: "50%", background: COLORS.textDim,
-                  animation: `pulse 1.2s ${i * 0.2}s ease-in-out infinite`
-                }} />
-              ))}
-              <style>{`@keyframes pulse { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1)} }`}</style>
-            </div>
-          </div>
-        )}
-
-        {chatError && (
-          <div style={{
-            padding: "10px 14px", borderRadius: 8,
-            background: "rgba(239,83,80,0.1)", border: `1px solid ${COLORS.red}`,
-            fontSize: 12, color: COLORS.red
-          }}>
-            ⚠ {chatError}
-          </div>
-        )}
-
-        <div ref={chatEndRef} />
-      </div>
-
-      {/* Input */}
-      <div style={{
-        padding: "12px 20px", borderTop: `1px solid ${COLORS.border}`,
-        display: "flex", gap: 10, flexShrink: 0, background: COLORS.surface
-      }}>
-        <input
-          style={{ ...S.input, flex: 1 }}
-          placeholder="Ask about patterns, scores, or parameters…"
-          value={chatInput}
-          onChange={e => setChatInput(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleChat()}
-          disabled={chatLoading}
-        />
-        {chatLoading ? (
-          <button style={S.btn("danger")} onClick={cancelChat}>Stop</button>
-        ) : (
-          <button style={S.btn("primary", !chatInput.trim())} onClick={handleChat} disabled={!chatInput.trim()}>
-            Send
-          </button>
-        )}
-      </div>
-    </div>
-  );
-
   // ─── Heatmap tab ──────────────────────────────────────────────────────────────
   const renderHeatmap = () => {
     const isEmpty = !rawData;
@@ -4486,11 +4320,6 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
 
           {/* Legend */}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-            {sectorClassifying && (
-              <span style={{ fontSize: 10, color: COLORS.textMuted, fontStyle: "italic" }}>
-                🔍 Classifying sectors…
-              </span>
-            )}
             {/* Sort controls */}
             <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
               <span style={{ fontSize: 10, color: COLORS.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>Sort</span>
@@ -5013,7 +4842,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           </button>
           <button
             style={{ ...S.btn("ghost"), fontSize: 11, padding: "4px 10px", color: COLORS.textDim }}
-            title="Keyboard shortcuts: J/K navigate · Enter open chart · H heatmap · L leaderboard · D domain · A AI analyst"
+            title="Keyboard shortcuts: J/K navigate · Enter open chart · H heatmap · L leaderboard · D domain"
           >
             ⌨
           </button>
@@ -5046,7 +4875,6 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               { id: "chart", label: `📈 Chart${selectedTicker ? ` · ${selectedTicker}` : ""}` },
               { id: "heatmap", label: `🌡️ Pulse Heatmap${rawData ? ` (${hmData.length})` : ""}` },
               { id: "domain", label: `⬡ Domain Intel${selectedTicker ? ` · ${selectedTicker}` : ""}` },
-              { id: "chat", label: "🤖 AI Analyst" },
             ].map(({ id, label }) => (
               <button key={id} style={S.tab(activeTab === id)} onClick={() => setActiveTab(id)}>
                 {label}
@@ -5059,7 +4887,6 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
             {activeTab === "chart" && renderChart()}
             {activeTab === "heatmap" && renderHeatmap()}
             {activeTab === "domain" && renderDomainIntelligence()}
-            {activeTab === "chat" && renderChat()}
           </div>
         </div>
       </div>
