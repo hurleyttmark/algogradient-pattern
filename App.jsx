@@ -2529,6 +2529,7 @@ export default function App() {
     setDomainSingularity(null);
     setDomainSingularityLoading(false);
     setSelectedDomainNode(null);
+  }, [selectedTicker]);
 
   // ── Auto-load bundled default CSV on startup ──
   useEffect(() => {
