@@ -3248,13 +3248,15 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       fontSize: 13, outline: "none", width: "100%", boxSizing: "border-box",
       transition: "border-color 0.15s"
     },
-    leaderRow: (selected) => ({
-      display: "flex", alignItems: "center", gap: 10,
+    leaderRow: (selected, isMobile) => ({
+      display: "flex", alignItems: isMobile ? "flex-start" : "center", gap: 10,
       padding: "9px 14px", borderRadius: 8, cursor: "pointer",
       background: selected ? COLORS.accentDim : "transparent",
       border: `1px solid ${selected ? COLORS.accent : "transparent"}`,
-      transition: "background 0.1s", height: VIRTUAL_ROW_H - 6,
-      boxSizing: "border-box", marginBottom: 4,
+      transition: "background 0.1s",
+      height: isMobile ? "auto" : VIRTUAL_ROW_H - 6,
+      minHeight: isMobile ? VIRTUAL_ROW_H - 6 : undefined,
+      boxSizing: "border-box", marginBottom: isMobile ? 6 : 4,
     }),
     chatBubble: (role) => ({
       maxWidth: "82%", padding: "10px 14px",
@@ -3692,7 +3694,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               return (
                 <div
                   key={item.ticker}
-                  style={S.leaderRow(selected)}
+                  style={S.leaderRow(selected, isMobile)}
                   onClick={() => {
                     setSelectedTicker(item.ticker);
                     // Stay on chart or domain if already there; otherwise go to chart
