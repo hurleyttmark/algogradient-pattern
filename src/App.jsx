@@ -1,4 +1,4 @@
-/*
+ /*
   REASONING CONTRACT (summary) — v4
   ─────────────────────────────────────────────────────────
   • State shape: rawData Map, scores[], tolerance{}, scanStatus, chartData[], chatMessages[], virtualOffset, parseWarnings[]
