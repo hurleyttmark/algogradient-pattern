@@ -878,25 +878,30 @@ function detectReverseHS(ohlcv, tol) {
         const durationScore = Math.max(0, Math.exp(-Math.pow((totalLen - IDEAL_TOTAL) / (IDEAL_TOTAL * 0.55), 2)));
 
         // ── Shoulder symmetry (price) ──
+        // Hard gate: shoulders must be within 10% of each other in price.
+        // Anything looser is not a textbook reverse H&S — eliminate early.
         const shoulderSym = 1 - Math.abs(leftShPrice - rightShPrice) / shoulderAvg;
-        if (shoulderSym < 0.80) continue;
+        if (shoulderSym < 0.90) continue;  // tightened from 0.80 → 0.90
+
+        // ── Neckline through the two inner peaks ──
+        // Hard gate: the two inner peaks (neckline anchors) must also be
+        // within 10% of each other — a strongly tilted neckline means the
+        // pattern is asymmetric at the resistance level, not just the lows.
+        const peakAvg = (leftPeakPrice + rightPeakPrice) / 2;
+        const necklineTilt = Math.abs(rightPeakPrice - leftPeakPrice) / peakAvg;
+        if (necklineTilt > 0.10) continue; // hard gate: >10% peak divergence eliminated
+        // Score: 0% tilt → 1.0, 10% tilt → 0 (steeper decay than before)
+        const necklineScore = Math.max(0, 1 - necklineTilt / 0.10);
+
+        const necklineSlope = (rightPeakPrice - leftPeakPrice) / (rightPeak - leftPeak);
+        const necklineAt = (idx) => leftPeakPrice + necklineSlope * (idx - leftPeak);
 
         // ── Shoulder width symmetry ──
         const leftWidth  = head - leftSh;
         const rightWidth = rightSh - head;
         const widthSym = 1 - Math.abs(leftWidth - rightWidth) / (leftWidth + rightWidth);
-
-        // ── Neckline through the two inner peaks ──
-        const necklineSlope = (rightPeakPrice - leftPeakPrice) / (rightPeak - leftPeak);
-        const necklineAt = (idx) => leftPeakPrice + necklineSlope * (idx - leftPeak);
-        // Neckline rating: 100% ONLY when the line through the two peaks is
-        // truly flat (level resistance). Any tilt reduces the score in
-        // proportion to the angle — the more the peaks differ in height (which
-        // is the same as the shoulders being unbalanced), the lower the score.
-        // necklineTilt = fractional price difference between the two peaks.
-        // 0% tilt → 1.0, ~20% tilt → 0.
-        const necklineTilt = Math.abs(rightPeakPrice - leftPeakPrice) / ((leftPeakPrice + rightPeakPrice) / 2);
-        const necklineScore = Math.max(0, 1 - necklineTilt / 0.20);
+        // Hard gate: width ratio must be at least 40:60 — wildly lopsided patterns out
+        if (widthSym < 0.40) continue;
 
         // ── Shoulders shallow vs head & shouldn't sink far below neckline ──
         // Shoulder low relative to head depth (shallower = better).
@@ -964,19 +969,23 @@ function detectReverseHS(ohlcv, tol) {
         });
         const areaFit = computeRHSAreaFit(smooth, ghostPts, headHeightForFit);
 
-        // ── Composite (weights styled after the cup detector) ──
+        // ── Composite ──
+        // shoulderSym and necklineScore now carry the most weight — they are
+        // the primary shape quality dimensions after the hard gates above.
+        // Patterns that squeezed through with 90% shoulder sym still get
+        // heavily penalised in score vs textbook-perfect ones.
         const composite =
-          headDepthScore * 0.16 +
-          shoulderSym    * 0.14 +
-          areaFit        * 0.14 +   // tight fit to the ideal U-V-U shape
-          widthSym       * 0.09 +
-          necklineScore  * 0.11 +
-          shallowScore   * 0.07 +
-          shapeScore     * 0.08 +
-          durationScore  * 0.07 +
-          volScore       * 0.07 +
-          breakoutProx   * 0.04 +
-          volSurge       * 0.03;
+          headDepthScore * 0.14 +
+          shoulderSym    * 0.20 +   // increased: primary shape quality gate
+          areaFit        * 0.12 +
+          widthSym       * 0.08 +
+          necklineScore  * 0.18 +   // increased: peak alignment is critical
+          shallowScore   * 0.06 +
+          shapeScore     * 0.07 +
+          durationScore  * 0.05 +
+          volScore       * 0.06 +
+          breakoutProx   * 0.03 +
+          volSurge       * 0.01;
 
         if (composite > bestScore) {
           bestScore = composite;
