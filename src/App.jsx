@@ -4062,8 +4062,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
 
           {/* ── Cup & Handle view: Recharts ── */}
           {chartSubTab === "pattern" && (
-            <>
-              <div style={{ flex: 3, minHeight: 0 }}>
+            <div key={`pattern-${selectedTicker}`} style={{ display: "flex", flexDirection: "column", gap: 12, flex: 1, minHeight: 0 }}>
+              <div style={isMobile ? { height: "calc(100% - 96px)", minHeight: 240 } : { flex: 3, minHeight: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
                     <CartesianGrid stroke={COLORS.border} strokeDasharray="2 4" vertical={false} />
@@ -4171,7 +4171,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               </div>
 
               {/* Volume bars */}
-              <div style={{ flex: 1, minHeight: 0, maxHeight: 80 }}>
+              <div style={isMobile ? { height: 80, minHeight: 80, flexShrink: 0 } : { flex: 1, minHeight: 0, maxHeight: 80 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 0, right: 16, bottom: 0, left: 8 }}>
                     <XAxis dataKey="idx" hide />
@@ -4189,7 +4189,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
-            </>
+            </div>
           )}
         </div>
 
