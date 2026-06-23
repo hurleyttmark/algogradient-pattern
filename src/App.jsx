@@ -1943,16 +1943,31 @@ const PulseChart = ({ data }) => {
 // cup-and-handle detection domains instead of transcript concepts.
 // ═══════════════════════════════════════════════════════════════
 
-/* Fixed domain definitions — each maps to a detection score field */
-const DOMAIN_DEFS = [
+/* Fixed domain definitions — Cup & Handle */
+const DOMAIN_DEFS_CUP = [
   { id: "cup_shape",    label: "Cup Shape",      desc: "How cleanly the price traces a rounded bottom. Composite of area symmetry and span symmetry.",    field: (d) => d ? (d.areaSymmetry * 0.5 + d.spanSymmetry * 0.5) : 0,         relatedIds: ["gradient", "breakout"] },
   { id: "handle",       label: "Handle",         desc: "Quality of the handle consolidation — depth of retrace and tightness of the drift.",              field: (d) => d ? Math.max(0, 1 - Math.abs(d.handleRetrace - 0.3) / 0.3) : 0, relatedIds: ["pulse", "breakout"] },
   { id: "gradient",     label: "Gradient Arc",   desc: "Smoothness of the price recovery arc from cup bottom toward the rim.",                            field: (d) => d ? d.gradConf : 0,                                             relatedIds: ["cup_shape", "volume"] },
   { id: "pulse",        label: "Pulse / Streak", desc: "Recent candle momentum — consecutive bullish bars in the handle zone.",                           field: (d) => d ? d.pulseBonus : 0,                                           relatedIds: ["handle", "volume"] },
   { id: "breakout",     label: "Breakout Prox",  desc: "How close price is to the pivot / breakout level relative to the cup rim.",                       field: (d) => d ? d.breakoutProx : 0,                                         relatedIds: ["cup_shape", "handle"] },
-  { id: "volume",       label: "Volume",         desc: "Volume confirmation — expansion on up days, contraction on handle drift.",                        field: (d) => d ? Math.min(1, d.pulseBonus * 1.2) : 0,                       relatedIds: ["gradient", "pulse"] },
-  { id: "sector",       label: "Sector",         desc: "Sector-level momentum from the pulse heatmap — tailwind or headwind for this pattern.",           field: null,                                                                  relatedIds: ["volume", "pulse"] },
+  { id: "volume",       label: "Volume",         desc: "Volume confirmation — expansion on up days, contraction on handle drift.",                        field: (d) => d ? Math.min(1, d.pulseBonus * 1.2) : 0,                        relatedIds: ["gradient", "pulse"] },
+  { id: "sector",       label: "Sector",         desc: "Sector-level momentum from the pulse heatmap — tailwind or headwind for this pattern.",           field: null,                                                                   relatedIds: ["volume", "pulse"] },
 ];
+
+/* Fixed domain definitions — Reverse Head & Shoulders */
+const DOMAIN_DEFS_RHS = [
+  { id: "shoulder_sym", label: "Shoulder Sym",   desc: "How symmetrical the two shoulders are in height and distance from the head.",                     field: (d) => d ? (d.shoulderSym ?? d.rimSymmetry ?? 0) : 0,                  relatedIds: ["neckline", "breakout"] },
+  { id: "head_depth",   label: "Head Depth",     desc: "Depth of the head trough relative to the shoulders — ideal range 10-30%.",                        field: (d) => d ? (d.radar?.depthScore ?? d.headDepth ?? 0) : 0,              relatedIds: ["shape_fit", "volume"] },
+  { id: "shape_fit",    label: "Shape Fit",      desc: "How well the overall W-shape conforms to a textbook reverse H&S formation.",                      field: (d) => d ? (d.shapeScore ?? d.areaSymmetry ?? 0) : 0,                  relatedIds: ["head_depth", "neckline"] },
+  { id: "neckline",     label: "Neckline",       desc: "Quality of the neckline — near-horizontal lines score highest; steep slopes reduce conviction.",   field: (d) => d ? (d.necklineScore ?? d.breakoutProx ?? 0) : 0,               relatedIds: ["shoulder_sym", "breakout"] },
+  { id: "breakout",     label: "Breakout Prox",  desc: "How close price is to neckline breakout — the key trigger level for the pattern.",                 field: (d) => d ? d.breakoutProx : 0,                                         relatedIds: ["neckline", "volume"] },
+  { id: "volume",       label: "Vol Surge",      desc: "Volume expansion at neckline breakout — confirms institutional participation.",                    field: (d) => d ? (d.volSurge ?? d.volumeConf ?? 0) : 0,                     relatedIds: ["head_depth", "pulse"] },
+  { id: "pulse",        label: "Momentum",       desc: "Recent candle momentum as price approaches the neckline breakout level.",                          field: (d) => d ? (d.recentMomentum ?? d.pulseBonus ?? 0) : 0,               relatedIds: ["volume", "breakout"] },
+  { id: "sector",       label: "Sector",         desc: "Sector-level momentum from the pulse heatmap — tailwind or headwind for this reversal.",           field: null,                                                                   relatedIds: ["volume", "pulse"] },
+];
+
+/* Legacy alias */
+const DOMAIN_DEFS = DOMAIN_DEFS_CUP;
 
 /* Compute a recency multiplier [0.25 – 1.0] based on how far the right rim
    is from the end of the price series.
@@ -1972,7 +1987,8 @@ function computeRecencyMultiplier(barsFromEnd, totalBars) {
 /* Build graph nodes from a detection object + optional sector pulse score.
    recencyMult (0.25–1.0): older patterns get proportionally lower node scores. */
 function buildDomainNodes(detection, sectorPulse, recencyMult = 1.0) {
-  return DOMAIN_DEFS.map(def => {
+  const defs = detection?.setupType === "rhs" ? DOMAIN_DEFS_RHS : DOMAIN_DEFS_CUP;
+  return defs.map(def => {
     const rawScore = def.field
       ? Math.max(0, Math.min(1, def.field(detection)))
       : (sectorPulse != null ? Math.max(0, Math.min(1, 0.5 + sectorPulse)) : 0.5);
@@ -3188,7 +3204,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       minHeight: "100vh",
       fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
       display: "flex", flexDirection: "column", fontSize: 14,
-      overflow: "hidden", width: "100%", maxWidth: "100vw",
+      overflow: isMobile ? "visible" : "hidden",
+      width: "100%", maxWidth: "100vw",
       boxSizing: "border-box",
     },
     header: {
@@ -3198,14 +3215,14 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
     },
     logo: { fontSize: 17, fontWeight: 800, color: COLORS.accent, letterSpacing: "-0.5px", whiteSpace: "nowrap" },
     logoSub: { fontSize: 11, color: COLORS.textMuted, marginLeft: 8 },
-    main: { display: "flex", flex: 1, minHeight: 0, overflow: "hidden", flexDirection: isMobile ? "column" : "row" },
+    main: { display: "flex", flex: 1, minHeight: 0, overflow: isMobile ? "visible" : "hidden", flexDirection: isMobile ? "column" : "row" },
     sidebar: isMobile ? { display: "none" } : {
       width: 272, flexShrink: 0, background: COLORS.surface,
       borderRight: `1px solid ${COLORS.border}`,
       display: "flex", flexDirection: "column", overflow: "hidden"
     },
     sidebarScroll: { flex: 1, overflowY: "auto", padding: 14 },
-    content: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" },
+    content: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden" },
     tabBar: {
       display: isMobile ? "none" : "flex", borderBottom: `1px solid ${COLORS.border}`,
       background: COLORS.surface, flexShrink: 0, padding: "0 4px"
@@ -3217,7 +3234,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       cursor: "pointer", background: "none", border: "none",
       outline: "none", transition: "color 0.15s", whiteSpace: "nowrap"
     }),
-    panel: { flex: 1, overflow: "auto", minHeight: 0, minWidth: 0, paddingBottom: isMobile ? 64 : 0, overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" },
+    panel: { flex: 1, overflow: isMobile ? "visible" : "auto", minHeight: isMobile ? "auto" : 0, minWidth: 0, paddingBottom: isMobile ? 80 : 0, overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" },
     card: {
       background: COLORS.surfaceHover, border: `1px solid ${COLORS.border}`,
       borderRadius: 10, padding: 14, marginBottom: 10
@@ -3860,7 +3877,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       .map(d => d.idx);
 
     return (
-      <div style={{ height: isMobile ? "auto" : "100%", minHeight: isMobile ? "100%" : undefined, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden" }}>
+      <div style={{ height: isMobile ? "auto" : "100%", minHeight: isMobile ? 0 : undefined, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden" }}>
         {/* Ticker header */}
         <div style={{
           padding: isMobile ? "10px 12px" : "12px 20px", borderBottom: `1px solid ${COLORS.border}`,
@@ -4025,7 +4042,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
         </div>
 
         <div style={isMobile
-          ? { minHeight: 420, flexShrink: 0, padding: chartSubTab === "gradient" ? "8px 0 0" : "16px 12px 8px", display: "flex", flexDirection: "column", gap: 12 }
+          ? { padding: chartSubTab === "gradient" ? "8px 0 0" : "16px 12px 8px", display: "flex", flexDirection: "column", gap: 12 }
           : { flex: 1, minHeight: 0, padding: chartSubTab === "gradient" ? "8px 0 0" : "16px 12px 8px", display: "flex", flexDirection: "column", gap: 12 }}>
 
           {/* ── Momentum Gradient view: canvas-based CandlePulse chart ── */}
@@ -4061,7 +4078,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                 </div>
               </div>
               {/* Canvas chart fills remainder */}
-              <div style={isMobile ? { height: 380, flexShrink: 0, padding: "12px 16px 8px", boxSizing: "border-box" } : { flex: 1, minHeight: 0, padding: "12px 16px 8px" }}>
+              <div style={isMobile ? { height: 380, padding: "12px 16px 8px", boxSizing: "border-box" } : { flex: 1, minHeight: 0, padding: "12px 16px 8px" }}>
                 <PulseChart data={chartData} />
               </div>
             </>
@@ -4070,9 +4087,9 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           {/* ── Cup & Handle view: Recharts ── */}
           {chartSubTab === "pattern" && (
             <div key={`pattern-${selectedTicker}`} style={isMobile
-              ? { display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }
+              ? { display: "flex", flexDirection: "column", gap: 12 }
               : { display: "flex", flexDirection: "column", gap: 12, flex: 1, minHeight: 0 }}>
-              <div style={isMobile ? { height: 300, flexShrink: 0 } : { flex: 3, minHeight: 0 }}>
+              <div style={isMobile ? { height: 320 } : { flex: 3, minHeight: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
                     <CartesianGrid stroke={COLORS.border} strokeDasharray="2 4" vertical={false} />
@@ -4180,7 +4197,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               </div>
 
               {/* Volume bars */}
-              <div style={isMobile ? { height: 80, minHeight: 80, flexShrink: 0 } : { flex: 1, minHeight: 0, maxHeight: 80 }}>
+              <div style={isMobile ? { height: 80 } : { flex: 1, minHeight: 0, maxHeight: 80 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 0, right: 16, bottom: 0, left: 8 }}>
                     <XAxis dataKey="idx" hide />
@@ -4711,7 +4728,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       : { label: `⏳ ${patternBarsFromEnd}b ago`, color: "#f87171" };
 
     return (
-      <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", background: "#0b0d11" }}>
+      <div style={{ height: isMobile ? "auto" : "100%", minHeight: isMobile ? "85vh" : undefined, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden", background: "#0b0d11" }}>
         <style>{`
           @keyframes orb-pulse { 0%,100%{box-shadow:0 0 6px #b39dfa;opacity:1} 50%{box-shadow:0 0 16px #b39dfa;opacity:.7} }
           @keyframes spin { to{transform:rotate(360deg)} }
@@ -4742,7 +4759,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               </>);
             })()}
             <div>
-              <span style={{ fontSize: 15, fontWeight: 800, color: "#7c9fff" }}>⬡ Domain Intelligence</span>
+              <span style={{ fontSize: 15, fontWeight: 800, color: "#7c9fff" }}>⬡ Pattern Intelligence</span>
               {selectedTicker && (
                 <span style={{ fontSize: 12, color: "#7986cb", marginLeft: 10 }}>
                   {selectedTicker}
@@ -4823,8 +4840,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
 
         {/* Main content: graph + optional drawer */}
         {domainNodes.length > 0 && (
-          <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ flex: 1, display: "flex", minHeight: isMobile ? 0 : 0, flexDirection: isMobile ? "column" : "row" }}>
+            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden" }}>
               {/* Legend row */}
               <div style={{ padding: "9px 16px", borderBottom: "1px solid #2a2f45", background: "#13161d", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap", flexShrink: 0 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".08em", color: "#7986cb" }}>Cohesion arc</span>
@@ -4838,7 +4855,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                 {!isMobile && <span style={{ fontSize: 11, color: "#7986cb", marginLeft: "auto" }}>Click node for details</span>}
               </div>
               {/* SVG */}
-              <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+              <div style={isMobile ? { height: 340, position: "relative" } : { flex: 1, minHeight: 0, position: "relative" }}>
                 <SVGDomainGraph
                   nodes={domainNodes}
                   selectedId={selectedDomainNode?.id}
@@ -4880,10 +4897,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           height: 100%;
           margin: 0;
           overflow: hidden;
-          position: fixed;
           width: 100%;
           overscroll-behavior: none;
-          touch-action: pan-y;
         }
         #root, #__next {
           height: 100%;
@@ -4898,12 +4913,29 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
             height: 100dvh;
           }
         }
+        /* Mobile: let the panel scroll freely */
+        @media (max-width: 768px) {
+          html, body {
+            overflow: auto;
+            height: auto;
+            min-height: 100%;
+          }
+          #root, #__next {
+            height: auto;
+            overflow: visible;
+          }
+          .cupscan-app-root {
+            height: auto;
+            min-height: 100dvh;
+            overflow: visible;
+          }
+        }
       `}</style>
       {/* Header */}
       <div style={S.header}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 0 }}>
-          <span style={S.logo}>⌖ CupScan</span>
-          {!isMobile && <span style={S.logoSub}>Breakout Setup Engine v12 · Cup &amp; Reverse H&amp;S</span>}
+          <span style={S.logo}>⌖ PatternPulse</span>
+          {!isMobile && <span style={S.logoSub}>by AlgoGradient · Cup &amp; Handle · Reverse H&amp;S</span>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
           {scanStatus === "done" && !isMobile && (
@@ -4957,7 +4989,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               { id: "leaderboard", label: `📋 Leaderboard${scores.length ? ` (${scores.length})` : ""}` },
               { id: "chart", label: `📈 Chart${selectedTicker ? ` · ${selectedTicker}` : ""}` },
               { id: "heatmap", label: `🌡️ Pulse Heatmap${rawData ? ` (${hmData.length})` : ""}` },
-              { id: "domain", label: `⬡ Domain Intel${selectedTicker ? ` · ${selectedTicker}` : ""}` },
+              { id: "domain", label: `⬡ Pattern Intel${selectedTicker ? ` · ${selectedTicker}` : ""}` },
             ].map(({ id, label }) => (
               <button key={id} style={S.tab(activeTab === id)} onClick={() => setActiveTab(id)}>
                 {label}
@@ -4986,7 +5018,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
             { id: "leaderboard", icon: "📋", label: "Scores" },
             { id: "chart",       icon: "📈", label: "Chart" },
             { id: "heatmap",     icon: "🌡️",  label: "Heat" },
-            { id: "domain",      icon: "⬡",   label: "Domain" },
+            { id: "domain",      icon: "⬡",   label: "Intel" },
             { id: "settings",    icon: "⚙️",  label: "Settings" },
           ].map(({ id, icon, label }) => (
             <button key={id}
