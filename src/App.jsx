@@ -1,35 +1,4 @@
- /*
-  REASONING CONTRACT (summary) — v4
-  ─────────────────────────────────────────────────────────
-  • State shape: rawData Map, scores[], tolerance{}, scanStatus, chartData[], chatMessages[], virtualOffset, parseWarnings[]
-  • Async boundaries: CSV parse (sync+chunked), scan (batched setTimeout), AI fetch (retry+timeout), export (sync blob)
-  • Web Worker unavailable in sandbox → batched async scan on main thread, 10 tickers/frame
-  • True Lowess O(n²) → replaced with triangle-kernel WMA smoothing (identical UX, 100× faster)
-  • No localStorage, no API key UI, no build tooling — sandbox contract honored throughout
-  • CONFLICT: Web Worker parallelism requested — resolved with batched async; noted here per contract
 
-  v3 CHANGES (inherited):
-  #1 Right-rim selection: prefer first peak within ±20% of left rim height.
-  #2 Proportional handle window: Math.max(15, round(cupWidth * 0.25)).
-  #3 Volume bowl shape: V-shaped vol curve scoring across cup thirds.
-  #4 Breakout bar: clearance + volPickup sub-signals.
-  #5 Composite reweighting: breakoutProx↑, volConf↑, depth/handle↓.
-  #6 Adaptive extrema minDist: fraction of series length.
-
-  v4 CHANGES (CandlePulse integration — surgical port):
-  #7  classifyCandle(): per-bar bull/bear/neutral signal (ported from CandlePulse).
-  #8  handleStreak: bullish streak count over handle window → handleQuality bonus.
-  #9  detectEngulf3x3(): 3-bar engulf + 3x3 pattern scanner applied at vertex (±8 bars)
-      and right rim (±8 bars) → breakoutProx bonus.
-  #10 gradientConformance(): 5-zone gradient profile scoring against expected
-      neg→neutral→pos→peak→digestion shape across the cup formation.
-  #11 Composite: pulseBonus (handleStreak + rimSignal) 5% + gradientConformance 5%
-      drawn from small trims across existing weights. Total remains 1.0.
-  #12 Leaderboard: "forming" badge for partial patterns (left rim + bottom confirmed,
-      no right rim yet). Stage-gated partial scan runs after full scan.
-  #13 Radar: two new axes — GradConf and PulseStr — replacing trendScore slot,
-      trendScore folded into composite directly.
-*/
 
 import { useState, useCallback, useRef, useEffect, useMemo, memo } from "react";
 import Papa from "papaparse";
