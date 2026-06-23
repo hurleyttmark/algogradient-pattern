@@ -2528,6 +2528,15 @@ export default function App() {
   const [domainSingularity, setDomainSingularity] = useState(null);
   const [domainSingularityLoading, setDomainSingularityLoading] = useState(false);
 
+  // ── Mobile responsiveness ──
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= 768);
+  const [showSettings, setShowSettings] = useState(false); // mobile settings drawer (upload + tolerances)
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= 768);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   const cancelRef = useRef(false);
 
   const scanStartRef = useRef(null);
@@ -3182,8 +3191,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
     },
     logo: { fontSize: 17, fontWeight: 800, color: COLORS.accent, letterSpacing: "-0.5px", whiteSpace: "nowrap" },
     logoSub: { fontSize: 11, color: COLORS.textMuted, marginLeft: 8 },
-    main: { display: "flex", flex: 1, minHeight: 0, overflow: "hidden" },
-    sidebar: {
+    main: { display: "flex", flex: 1, minHeight: 0, overflow: "hidden", flexDirection: isMobile ? "column" : "row" },
+    sidebar: isMobile ? { display: "none" } : {
       width: 272, flexShrink: 0, background: COLORS.surface,
       borderRight: `1px solid ${COLORS.border}`,
       display: "flex", flexDirection: "column", overflow: "hidden"
@@ -3191,7 +3200,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
     sidebarScroll: { flex: 1, overflowY: "auto", padding: 14 },
     content: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" },
     tabBar: {
-      display: "flex", borderBottom: `1px solid ${COLORS.border}`,
+      display: isMobile ? "none" : "flex", borderBottom: `1px solid ${COLORS.border}`,
       background: COLORS.surface, flexShrink: 0, padding: "0 4px"
     },
     tab: (active) => ({
@@ -3201,7 +3210,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       cursor: "pointer", background: "none", border: "none",
       outline: "none", transition: "color 0.15s", whiteSpace: "nowrap"
     }),
-    panel: { flex: 1, overflow: "auto", minHeight: 0 },
+    panel: { flex: 1, overflow: "auto", minHeight: 0, paddingBottom: isMobile ? 64 : 0 },
     card: {
       background: COLORS.surfaceHover, border: `1px solid ${COLORS.border}`,
       borderRadius: 10, padding: 14, marginBottom: 10
@@ -3498,7 +3507,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
         <div style={{
           padding: "8px 16px", borderBottom: `1px solid ${COLORS.border}`,
           display: "flex", gap: 6, alignItems: "center", flexShrink: 0,
-          background: COLORS.bg
+          background: COLORS.bg, overflowX: "auto", WebkitOverflowScrolling: "touch"
         }}>
           <span style={{ fontSize: 10, color: COLORS.textMuted, fontWeight: 600, letterSpacing: "0.5px", textTransform: "uppercase", marginRight: 4, whiteSpace: "nowrap" }}>
             Recency
@@ -3876,7 +3885,9 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
             </div>
           </div>
           {det && (
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div style={isMobile
+              ? { display: "flex", gap: 12, flexWrap: "nowrap", overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 2 }
+              : { display: "flex", gap: 12, flexWrap: "wrap" }}>
               <StatPill label="Score" value={`${(det.score * 100).toFixed(1)}%`} color={COLORS.accent} />
               {/* Cup geometry — only on the Cup & Handle view, cup setups */}
               {chartSubTab === "pattern" && det.setupType !== "rhs" && (
@@ -4171,9 +4182,10 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
         {det && radarData.length > 0 && (
           <div style={{
             borderTop: `1px solid ${COLORS.border}`, padding: "12px 16px",
-            display: "flex", alignItems: "center", gap: 18, flexShrink: 0, background: COLORS.surface
+            display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 18, flexShrink: 0,
+            background: COLORS.surface, flexDirection: isMobile ? "column" : "row"
           }}>
-            <div style={{ width: 190, height: 168, flexShrink: 0 }}>
+            <div style={{ width: isMobile ? "100%" : 190, height: 168, flexShrink: 0, display: "flex", justifyContent: "center" }}>
               <RadarChart width={190} height={168} data={radarData}>
                 <PolarGrid stroke={COLORS.border} />
                 <PolarAngleAxis dataKey="metric" tick={{ fill: COLORS.textDim, fontSize: 11, fontWeight: 600 }} />
@@ -4832,7 +4844,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       <div style={S.header}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 0 }}>
           <span style={S.logo}>⌖ CupScan</span>
-          <span style={S.logoSub}>Breakout Setup Engine v12 · Cup &amp; Reverse H&amp;S</span>
+          {!isMobile && <span style={S.logoSub}>Breakout Setup Engine v12 · Cup &amp; Reverse H&amp;S</span>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           {scanStatus === "done" && (
@@ -4866,7 +4878,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
 
       {/* Main layout */}
       <div style={S.main}>
-        {/* Sidebar */}
+        {/* Sidebar (desktop only — hidden on mobile, content moves to Settings drawer) */}
         <div style={S.sidebar}>
           <div style={S.sidebarScroll}>
             {renderUpload()}
@@ -4900,6 +4912,68 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           </div>
         </div>
       </div>
+
+      {/* Mobile bottom nav — replaces top tab bar on small screens */}
+      {isMobile && (
+        <div style={{
+          position: "fixed", bottom: 0, left: 0, right: 0,
+          background: COLORS.surface, borderTop: `1px solid ${COLORS.border}`,
+          display: "flex", zIndex: 200,
+          paddingBottom: "env(safe-area-inset-bottom, 0px)",
+        }}>
+          {[
+            { id: "leaderboard", icon: "📋", label: "Scores" },
+            { id: "chart",       icon: "📈", label: "Chart" },
+            { id: "heatmap",     icon: "🌡️",  label: "Heat" },
+            { id: "domain",      icon: "⬡",   label: "Domain" },
+            { id: "settings",    icon: "⚙️",  label: "Settings" },
+          ].map(({ id, icon, label }) => (
+            <button key={id}
+              onClick={() => id === "settings" ? setShowSettings(true) : setActiveTab(id)}
+              style={{
+                flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+                justifyContent: "center", padding: "8px 4px", gap: 3,
+                background: "none", border: "none", cursor: "pointer",
+                color: activeTab === id ? COLORS.accent : COLORS.textMuted,
+                fontSize: 10, fontWeight: 600,
+              }}
+            >
+              <span style={{ fontSize: 18 }}>{icon}</span>
+              <span>{label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Mobile settings drawer — holds Data Source + Detection Parameters
+          (the desktop sidebar content) behind a bottom-sheet overlay */}
+      {isMobile && showSettings && (
+        <>
+          <div onClick={() => setShowSettings(false)} style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 250,
+          }} />
+          <div style={{
+            position: "fixed", bottom: 0, left: 0, right: 0,
+            background: COLORS.surface, borderTop: `1px solid ${COLORS.border}`,
+            borderRadius: "16px 16px 0 0", zIndex: 300,
+            maxHeight: "82vh", overflowY: "auto",
+            paddingBottom: "env(safe-area-inset-bottom, 16px)",
+          }}>
+            <div style={{ width: 36, height: 4, background: COLORS.border, borderRadius: 2, margin: "12px auto 4px" }} />
+            <div style={{ padding: "8px 16px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${COLORS.border}` }}>
+              <span style={{ fontSize: 15, fontWeight: 800 }}>Settings</span>
+              <button onClick={() => setShowSettings(false)} style={{ background: "none", border: "none", color: COLORS.textDim, fontSize: 22, cursor: "pointer" }}>×</button>
+            </div>
+            <div style={{ padding: "0 16px 24px" }}>
+              {renderUpload()}
+              {scanStatus === "scanning" && renderProgress()}
+              {rawData && renderScanSummary()}
+              {renderWarnings()}
+              {renderTolerances()}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
