@@ -1956,14 +1956,14 @@ const DOMAIN_DEFS_CUP = [
 
 /* Fixed domain definitions — Reverse Head & Shoulders */
 const DOMAIN_DEFS_RHS = [
-  { id: "shoulder_sym", label: "Shoulder Sym",   desc: "How symmetrical the two shoulders are in height and distance from the head.",                     field: (d) => d ? (d.shoulderSym ?? d.rimSymmetry ?? 0) : 0,                  relatedIds: ["neckline", "breakout"] },
-  { id: "head_depth",   label: "Head Depth",     desc: "Depth of the head trough relative to the shoulders — ideal range 10-30%.",                        field: (d) => d ? (d.radar?.depthScore ?? d.headDepth ?? 0) : 0,              relatedIds: ["shape_fit", "volume"] },
-  { id: "shape_fit",    label: "Shape Fit",      desc: "How well the overall W-shape conforms to a textbook reverse H&S formation.",                      field: (d) => d ? (d.shapeScore ?? d.areaSymmetry ?? 0) : 0,                  relatedIds: ["head_depth", "neckline"] },
-  { id: "neckline",     label: "Neckline",       desc: "Quality of the neckline — near-horizontal lines score highest; steep slopes reduce conviction.",   field: (d) => d ? (d.necklineScore ?? d.breakoutProx ?? 0) : 0,               relatedIds: ["shoulder_sym", "breakout"] },
-  { id: "breakout",     label: "Breakout Prox",  desc: "How close price is to neckline breakout — the key trigger level for the pattern.",                 field: (d) => d ? d.breakoutProx : 0,                                         relatedIds: ["neckline", "volume"] },
-  { id: "volume",       label: "Vol Surge",      desc: "Volume expansion at neckline breakout — confirms institutional participation.",                    field: (d) => d ? (d.volSurge ?? d.volumeConf ?? 0) : 0,                     relatedIds: ["head_depth", "pulse"] },
-  { id: "pulse",        label: "Momentum",       desc: "Recent candle momentum as price approaches the neckline breakout level.",                          field: (d) => d ? (d.recentMomentum ?? d.pulseBonus ?? 0) : 0,               relatedIds: ["volume", "breakout"] },
-  { id: "sector",       label: "Sector",         desc: "Sector-level momentum from the pulse heatmap — tailwind or headwind for this reversal.",           field: null,                                                                   relatedIds: ["volume", "pulse"] },
+  { id: "shoulder_sym", label: "Shoulder Sym",   desc: "How symmetrical the two shoulders are in height and distance from the head.",                     field: (d) => d ? (typeof d.shoulderSym === "number" ? d.shoulderSym : (d.radar?.rimSymmetry ?? 0)) : 0,          relatedIds: ["neckline", "breakout"] },
+  { id: "head_depth",   label: "Head Depth",     desc: "Depth of the head trough relative to the shoulders — ideal range 10-30%.",                        field: (d) => d ? (typeof d.headDepth === "number" ? Math.min(1, d.headDepth / 0.3) : (d.radar?.depthScore ?? 0)) : 0, relatedIds: ["shape_fit", "volume"] },
+  { id: "shape_fit",    label: "Shape Fit",      desc: "How well the overall W-shape conforms to a textbook reverse H&S formation.",                      field: (d) => d ? (typeof d.shapeScore === "number" ? d.shapeScore : (d.radar?.handleQuality ?? 0)) : 0,           relatedIds: ["head_depth", "neckline"] },
+  { id: "neckline",     label: "Neckline",       desc: "Quality of the neckline — near-horizontal lines score highest; steep slopes reduce conviction.",   field: (d) => d ? (typeof d.necklineScore === "number" ? d.necklineScore : 0.5) : 0,                              relatedIds: ["shoulder_sym", "breakout"] },
+  { id: "breakout",     label: "Breakout Prox",  desc: "How close price is to neckline breakout — the key trigger level for the pattern.",                 field: (d) => d ? (d.breakoutProx ?? 0) : 0,                                                                      relatedIds: ["neckline", "volume"] },
+  { id: "volume",       label: "Vol Surge",      desc: "Volume expansion at neckline breakout — confirms institutional participation.",                    field: (d) => d ? (typeof d.volSurge === "number" ? d.volSurge : (d.radar?.volumeConf ?? 0)) : 0,                  relatedIds: ["head_depth", "pulse"] },
+  { id: "pulse",        label: "Momentum",       desc: "Recent candle momentum as price approaches the neckline breakout level.",                          field: (d) => d ? (typeof d.recentMomentum === "number" ? d.recentMomentum : (d.radar?.recentMomentum ?? 0.5)) : 0, relatedIds: ["volume", "breakout"] },
+  { id: "sector",       label: "Sector",         desc: "Sector-level momentum from the pulse heatmap — tailwind or headwind for this reversal.",           field: null,                                                                                                       relatedIds: ["volume", "pulse"] },
 ];
 
 /* Legacy alias */
@@ -2841,23 +2841,46 @@ export default function App() {
   const radarData = useMemo(() => {
     if (!selectedDetection?.radar) return [];
     const isRHS = selectedDetection.setupType === "rhs";
-    const labels = isRHS ? RADAR_LABELS_RHS : RADAR_LABELS;
     // Metric sets per chart tab and setup:
     //  • Gradient view → momentum-only signals (geometry irrelevant)
     //  • Cup pattern   → cup geometry + confirmation
     //  • RHS pattern   → reverse-H&S geometry + confirmation
-    let keys;
+    // Each entry: { key: radar field, label: display label }
+    let entries;
     if (chartSubTab === "gradient") {
-      keys = ["gradConf", "pulseStr", "recentMomentum", "breakoutProx", "volumeConf"];
+      entries = [
+        { key: "gradConf",       label: "Gradient" },
+        { key: "pulseStr",       label: "Pulse" },
+        { key: "recentMomentum", label: "Momentum" },
+        { key: "breakoutProx",   label: "Breakout" },
+        { key: "volumeConf",     label: "Volume" },
+      ];
     } else if (isRHS) {
-      // Reverse H&S axes (gradConf here = breakout volume surge)
-      keys = ["rimSymmetry", "areaSymmetry", "spanSymmetry", "depthScore", "handleQuality", "breakoutProx", "volumeConf", "gradConf"];
+      entries = [
+        { key: "rimSymmetry",  label: "Shoulder Sym" },
+        { key: "areaSymmetry", label: "Shape Fit" },
+        { key: "spanSymmetry", label: "Width Sym" },
+        { key: "depthScore",   label: "Head Depth" },
+        { key: "handleQuality",label: "U/V Shape" },
+        { key: "breakoutProx", label: "Brk Prox" },
+        { key: "volumeConf",   label: "Volume" },
+        { key: "gradConf",     label: "Brk Vol" },
+      ];
     } else {
-      keys = ["rimSymmetry", "areaSymmetry", "spanSymmetry", "depthScore", "handleQuality", "breakoutProx", "volumeConf", "gradConf"];
+      entries = [
+        { key: "rimSymmetry",  label: "Rim Sym" },
+        { key: "areaSymmetry", label: "Area Sym" },
+        { key: "spanSymmetry", label: "Span Sym" },
+        { key: "depthScore",   label: "Depth" },
+        { key: "handleQuality",label: "Handle" },
+        { key: "breakoutProx", label: "Breakout" },
+        { key: "volumeConf",   label: "Volume" },
+        { key: "gradConf",     label: "Gradient" },
+      ];
     }
-    return keys.map(k => ({
-      metric: labels[k],
-      value: Math.round((selectedDetection.radar[k] || 0) * 100)
+    return entries.map(({ key, label }) => ({
+      metric: label,
+      value: Math.round((selectedDetection.radar[key] || 0) * 100)
     }));
   }, [selectedDetection, chartSubTab]);
 
@@ -3869,8 +3892,10 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
     const yMax = Math.max(...chartData.map(d => d.high)) * 1.02;
 
     // Sample every N ticks for x-axis labels to avoid crowding
+    // On mobile use far fewer labels (4) since screen is narrow
     const totalBars = chartData.length;
-    const labelStep = Math.max(1, Math.floor(totalBars / 8));
+    const labelCount = isMobile ? 4 : 8;
+    const labelStep = Math.max(1, Math.floor(totalBars / labelCount));
 
     const xTicks = chartData
       .filter((_, i) => i % labelStep === 0)
@@ -4226,10 +4251,10 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
             display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 18, flexShrink: 0,
             background: COLORS.surface, flexDirection: isMobile ? "column" : "row"
           }}>
-            <div style={{ width: isMobile ? "100%" : 190, height: 168, flexShrink: 0, display: "flex", justifyContent: "center" }}>
-              <RadarChart width={190} height={168} data={radarData}>
+            <div style={{ width: isMobile ? "100%" : 210, height: 190, flexShrink: 0, display: "flex", justifyContent: "center" }}>
+              <RadarChart width={210} height={190} data={radarData} outerRadius={58} margin={{ top: 10, right: 10, bottom: 10, left: 10 }}>
                 <PolarGrid stroke={COLORS.border} />
-                <PolarAngleAxis dataKey="metric" tick={{ fill: COLORS.textDim, fontSize: 11, fontWeight: 600 }} />
+                <PolarAngleAxis dataKey="metric" tick={{ fill: COLORS.textDim, fontSize: 10, fontWeight: 600 }} />
                 <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
                 <Radar dataKey="value" stroke={COLORS.accent} fill={COLORS.accent} fillOpacity={0.28} />
               </RadarChart>
@@ -4243,18 +4268,18 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                   ? "Momentum signals"
                   : det?.setupType === "rhs" ? "Reverse H&S structure" : "Cup & Handle structure"}
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {radarData.map(({ metric, value }) => (
-                  <div key={metric} style={{
-                    flex: "1 1 104px", background: COLORS.surfaceHover,
-                    border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "8px 11px"
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {radarData.map(({ metric, value }, idx) => (
+                  <div key={idx} style={{
+                    flex: "1 1 90px", minWidth: 80, background: COLORS.surfaceHover,
+                    border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: "7px 10px"
                   }}>
-                    <div style={{ fontSize: 11, color: COLORS.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.4px" }}>{metric}</div>
-                    <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2, color: value >= 70 ? COLORS.green : value >= 50 ? COLORS.gold : COLORS.text }}>
+                    <div style={{ fontSize: 10, color: COLORS.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{metric}</div>
+                    <div style={{ fontSize: 17, fontWeight: 800, marginTop: 2, color: value >= 70 ? COLORS.green : value >= 50 ? COLORS.gold : COLORS.text }}>
                       {value}
                     </div>
                     <div style={{
-                      height: 4, borderRadius: 2, marginTop: 5,
+                      height: 3, borderRadius: 2, marginTop: 4,
                       background: `linear-gradient(90deg, ${value >= 70 ? COLORS.green : value >= 50 ? COLORS.gold : COLORS.accent} ${value}%, ${COLORS.border} ${value}%)`
                     }} />
                   </div>
