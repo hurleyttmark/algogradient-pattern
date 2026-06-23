@@ -1650,11 +1650,11 @@ function StatPill({ label, value, color }) {
   return (
     <div style={{
       background: COLORS_DARK.surfaceHover, border: `1px solid ${COLORS_DARK.border}`,
-      borderRadius: 9, padding: "10px 16px", minWidth: 116, flex: "1 1 116px",
+      borderRadius: 9, padding: "10px 16px", minWidth: 116, flex: "0 0 auto",
       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center"
     }}>
       <div style={{ fontSize: 11, color: COLORS_DARK.textDim, fontWeight: 700, letterSpacing: "0.4px", textTransform: "uppercase", marginBottom: 6, whiteSpace: "nowrap" }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 800, color: color || COLORS_DARK.text }}>{value}</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: color || COLORS_DARK.text, whiteSpace: "nowrap" }}>{value}</div>
     </div>
   );
 }
@@ -3570,7 +3570,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           return (
             <div style={{
               padding: "10px 16px", borderBottom: `1px solid ${COLORS.border}`,
-              display: "flex", gap: 8, alignItems: "center", flexShrink: 0, background: COLORS.bg
+              display: "flex", gap: 8, alignItems: "center", flexShrink: 0, background: COLORS.bg,
+              flexWrap: "wrap",
             }}>
               <span style={{ fontSize: 11, color: COLORS.textDim, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", marginRight: 4, whiteSpace: "nowrap" }}>
                 Setup
@@ -3595,9 +3596,11 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                   </button>
                 );
               })}
-              <span style={{ fontSize: 10, color: COLORS.textMuted, marginLeft: 4 }}>
-                Ranking by {tolerance.activeSetup === "rhs" ? "reverse H&S" : "cup & handle"} · both detected, toggle freely
-              </span>
+              {!isMobile && (
+                <span style={{ fontSize: 10, color: COLORS.textMuted, marginLeft: 4 }}>
+                  Ranking by {tolerance.activeSetup === "rhs" ? "reverse H&S" : "cup & handle"} · both detected, toggle freely
+                </span>
+              )}
             </div>
           );
         })()}
@@ -4773,13 +4776,15 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               </span>
             </div>
           )}
-          <div style={{ marginLeft: "auto", display: "flex", gap: 12, alignItems: "center" }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, color: "#7986cb" }}>
-              <span>Edge heat:</span>
-              <div style={{ width: 40, height: 4, background: "linear-gradient(to right, rgb(120,134,203), rgb(251,191,36), rgb(249,115,22))", borderRadius: 2 }} />
-              <svg width={20} height={6}><line x1={0} y1={3} x2={20} y2={3} stroke="#7986cb" strokeWidth={1.5} strokeDasharray="4 3" /></svg>
-              <span>bridge</span>
-            </div>
+          <div style={{ marginLeft: isMobile ? 0 : "auto", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            {!isMobile && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, color: "#7986cb" }}>
+                <span>Edge heat:</span>
+                <div style={{ width: 40, height: 4, background: "linear-gradient(to right, rgb(120,134,203), rgb(251,191,36), rgb(249,115,22))", borderRadius: 2 }} />
+                <svg width={20} height={6}><line x1={0} y1={3} x2={20} y2={3} stroke="#7986cb" strokeWidth={1.5} strokeDasharray="4 3" /></svg>
+                <span>bridge</span>
+              </div>
+            )}
             {domainNodes.length > 0 && (
               <button
                 onClick={() => { setSelectedDomainNode(null); handleDomainSingularize(); }}
@@ -4829,8 +4834,8 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                     <span style={{ fontSize: 11, color: "#9aa6d4" }}>{lbl}</span>
                   </div>
                 ))}
-                <span style={{ fontSize: 11, color: "#7986cb" }}>· Node size = score · Inner glow = strength</span>
-                <span style={{ fontSize: 11, color: "#7986cb", marginLeft: "auto" }}>Click node for details</span>
+                {!isMobile && <span style={{ fontSize: 11, color: "#7986cb" }}>· Node size = score · Inner glow = strength</span>}
+                {!isMobile && <span style={{ fontSize: 11, color: "#7986cb", marginLeft: "auto" }}>Click node for details</span>}
               </div>
               {/* SVG */}
               <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
