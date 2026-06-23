@@ -3855,7 +3855,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
       .map(d => d.idx);
 
     return (
-      <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      <div style={{ height: isMobile ? "auto" : "100%", minHeight: isMobile ? "100%" : undefined, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden" }}>
         {/* Ticker header */}
         <div style={{
           padding: isMobile ? "10px 12px" : "12px 20px", borderBottom: `1px solid ${COLORS.border}`,
@@ -4019,7 +4019,9 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
           </div>
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, padding: chartSubTab === "gradient" ? "8px 0 0" : "16px 12px 8px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={isMobile
+          ? { minHeight: 420, flexShrink: 0, padding: chartSubTab === "gradient" ? "8px 0 0" : "16px 12px 8px", display: "flex", flexDirection: "column", gap: 12 }
+          : { flex: 1, minHeight: 0, padding: chartSubTab === "gradient" ? "8px 0 0" : "16px 12px 8px", display: "flex", flexDirection: "column", gap: 12 }}>
 
           {/* ── Momentum Gradient view: canvas-based CandlePulse chart ── */}
           {chartSubTab === "gradient" && (
@@ -4054,7 +4056,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                 </div>
               </div>
               {/* Canvas chart fills remainder */}
-              <div style={{ flex: 1, minHeight: 0, padding: "12px 16px 8px" }}>
+              <div style={isMobile ? { height: 380, flexShrink: 0, padding: "12px 16px 8px" } : { flex: 1, minHeight: 0, padding: "12px 16px 8px" }}>
                 <PulseChart data={chartData} />
               </div>
             </>
@@ -4062,8 +4064,10 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
 
           {/* ── Cup & Handle view: Recharts ── */}
           {chartSubTab === "pattern" && (
-            <>
-              <div style={{ flex: 3, minHeight: 0 }}>
+            <div key={`pattern-${selectedTicker}`} style={isMobile
+              ? { display: "flex", flexDirection: "column", gap: 12, flexShrink: 0 }
+              : { display: "flex", flexDirection: "column", gap: 12, flex: 1, minHeight: 0 }}>
+              <div style={isMobile ? { height: 300, flexShrink: 0 } : { flex: 3, minHeight: 0 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
                     <CartesianGrid stroke={COLORS.border} strokeDasharray="2 4" vertical={false} />
@@ -4171,7 +4175,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
               </div>
 
               {/* Volume bars */}
-              <div style={{ flex: 1, minHeight: 0, maxHeight: 80 }}>
+              <div style={isMobile ? { height: 80, minHeight: 80, flexShrink: 0 } : { flex: 1, minHeight: 0, maxHeight: 80 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 0, right: 16, bottom: 0, left: 8 }}>
                     <XAxis dataKey="idx" hide />
@@ -4189,7 +4193,7 @@ Where score represents overall setup conviction (0=no edge, 100=textbook setup f
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
-            </>
+            </div>
           )}
         </div>
 
