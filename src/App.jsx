@@ -834,15 +834,52 @@ function detectReverseHS(ohlcv, tol) {
   let best = null;
   let bestScore = -1;
 
+  // ── Price range for size gates ──────────────────────────────────────────────
+  // Shoulders and head must be structurally significant relative to the
+  // overall price range — not just any local wiggle.
+  let priceMax = -Infinity, priceMin = Infinity;
+  for (const p of smooth) { if (p > priceMax) priceMax = p; if (p < priceMin) priceMin = p; }
+  const priceRange = priceMax - priceMin || 1;
+
+  // Minimum structural drop: a real shoulder or head low must dip at least
+  // 4% of the full price range below its surrounding context.
+  // This eliminates tiny noise blips that aren't real structural lows.
+  const MIN_STRUCTURAL_DROP = priceRange * 0.04;
+
+  // For each minimum, compute how deep it is relative to its local context
+  // (avg of neighbors within ±20 bars). A real low is well below its neighbors.
+  const structuralDepth = (idx) => {
+    const half = 20;
+    let sum = 0, count = 0;
+    for (let i = Math.max(0, idx - half); i <= Math.min(n - 1, idx + half); i++) {
+      if (i !== idx) { sum += smooth[i]; count++; }
+    }
+    const localAvg = count ? sum / count : smooth[idx];
+    return localAvg - smooth[idx]; // positive = idx is below its neighbors
+  };
+
   // Iterate head candidates = the deepest troughs. The head is the lowest of
   // the three lows, so scan minima as head, then find shoulders on each side.
   for (const head of minima) {
     const headPrice = smooth[head];
 
+    // Head must be a genuine structural low — not a small local dip
+    if (structuralDepth(head) < MIN_STRUCTURAL_DROP * 2) continue; // head needs 2× minimum drop
+
     // Left shoulder: a local min to the LEFT of the head, higher than head.
-    const leftShCandidates = minima.filter(m => m < head - 15 && smooth[m] > headPrice);
-    // Right shoulder: a local min to the RIGHT of the head, higher than head.
-    const rightShCandidates = minima.filter(m => m > head + 15 && smooth[m] > headPrice && m < n - 5);
+    // Must also be a structural low (at least MIN_STRUCTURAL_DROP below neighbors).
+    const leftShCandidates = minima.filter(m =>
+      m < head - 15 &&
+      smooth[m] > headPrice &&
+      structuralDepth(m) >= MIN_STRUCTURAL_DROP
+    );
+    // Right shoulder: same structural requirement.
+    const rightShCandidates = minima.filter(m =>
+      m > head + 15 &&
+      smooth[m] > headPrice &&
+      m < n - 5 &&
+      structuralDepth(m) >= MIN_STRUCTURAL_DROP
+    );
     if (!leftShCandidates.length || !rightShCandidates.length) continue;
 
     for (const leftSh of leftShCandidates) {
