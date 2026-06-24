@@ -1162,9 +1162,9 @@ function detectHeadAndShoulders(ohlcv, tol) {
         if (headAboveNeck <= 0) continue;
 
         // Both shoulders must be lower than head (already guaranteed by candidate filter)
-        // Head must be at least 10% above the higher shoulder in raw price terms
+        // Head should be at least 5% above the higher shoulder
         const higherShoulder = Math.max(leftShPrice, rightShPrice);
-        if (headPrice < higherShoulder * 1.10) continue;  // shallow head = not valid H&S
+        if (headPrice < higherShoulder * 1.03) continue;  // head barely taller = not H&S
 
         // ── Shoulder height fractions above neckline ──────────────────────
         const leftShAbove  = leftShPrice  - neckAtLeftSh;
@@ -1175,9 +1175,9 @@ function detectHeadAndShoulders(ohlcv, tol) {
         // Head dominance score: head height above neckline vs average shoulder
         const shAboveAvg   = (leftShAbove + rightShAbove) / 2;
         const headDomRatio = headAboveNeck / shAboveAvg;
-        if (headDomRatio < 1.35) continue;  // head must clearly dominate above neckline vs shoulders
+        if (headDomRatio < 1.1) continue;
         const headDepthScore = headDomRatio <= 3.0
-          ? Math.min(1, (headDomRatio - 1.35) / 1.65)
+          ? Math.min(1, (headDomRatio - 1.1) / 1.9)
           : Math.max(0, 1 - (headDomRatio - 3.0) / 2.0);
 
         // ── Shoulder symmetry: SOFT score only, no hard gate ─────────────
@@ -1263,12 +1263,10 @@ function detectHeadAndShoulders(ohlcv, tol) {
         const leftFrac  = leftShAbove  / headAboveNeck;
         const rightFrac = rightShAbove / headAboveNeck;
         // Score: penalty if shoulders are too tall (nearly as high as head = not H&S)
-        // or too short (barely above neckline = noise). Floor raised to 25% of head height.
-        const leftShallow  = Math.max(0, 1 - Math.max(0, leftFrac  - 0.75) / 0.25) * Math.min(1, leftFrac  / 0.25);
-        const rightShallow = Math.max(0, 1 - Math.max(0, rightFrac - 0.75) / 0.25) * Math.min(1, rightFrac / 0.25);
+        // or too short (barely above neckline = noise)
+        const leftShallow  = Math.max(0, 1 - Math.max(0, leftFrac  - 0.75) / 0.25) * Math.min(1, leftFrac  / 0.15);
+        const rightShallow = Math.max(0, 1 - Math.max(0, rightFrac - 0.75) / 0.25) * Math.min(1, rightFrac / 0.15);
         const shallowScore = (leftShallow + rightShallow) / 2;
-        // Hard gate: reject if either shoulder is less than 20% of head's neckline-to-peak height
-        if (leftFrac < 0.20 || rightFrac < 0.20) continue;
 
         // ── Composite ─────────────────────────────────────────────────────
         const composite =
@@ -3169,7 +3167,7 @@ export default function App() {
           const old = candleSignals[i - GRAD_WIN];
           if (old > 0) bull--; else if (old < 0) bear--;
         }
-        gradientScores[i] = Math.max(-1, Math.min(1, (bull - bear) / 5));
+        gradientScores[i] = Math.max(-1, Math.min(1, (bull - bear) / (GRAD_WIN * 0.5)));
       }
     }
 
@@ -4009,7 +4007,7 @@ export default function App() {
             <div style={{
               padding: "10px 16px", borderBottom: `1px solid ${COLORS.border}`,
               display: "flex", gap: 6, alignItems: "center", flexShrink: 0, background: COLORS.bg,
-              flexWrap: "wrap",
+              flexWrap: "nowrap", overflowX: "auto", WebkitOverflowScrolling: "touch",
             }}>
               {/* Bullish group */}
               <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap" }}>
