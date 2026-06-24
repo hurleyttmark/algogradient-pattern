@@ -937,8 +937,8 @@ function detectReverseHS(ohlcv, tol) {
         // A near-horizontal neckline is a textbook requirement.
         const peakAvg = (leftPeakPrice + rightPeakPrice) / 2;
         const necklineTilt = Math.abs(rightPeakPrice - leftPeakPrice) / peakAvg;
-        if (necklineTilt > 0.07) continue; // tightened: >7% eliminated (was 10%)
-        const necklineScore = Math.max(0, 1 - necklineTilt / 0.07); // steeper decay
+        if (necklineTilt > 0.05) continue; // tightened further: >5% eliminated (was 7%)
+        const necklineScore = Math.max(0, 1 - necklineTilt / 0.05); // steeper decay
 
         const necklineSlope = (rightPeakPrice - leftPeakPrice) / (rightPeak - leftPeak);
         const necklineAt = (idx) => leftPeakPrice + necklineSlope * (idx - leftPeak);
@@ -947,7 +947,7 @@ function detectReverseHS(ohlcv, tol) {
         const leftWidth  = head - leftSh;
         const rightWidth = rightSh - head;
         const widthSym = 1 - Math.abs(leftWidth - rightWidth) / (leftWidth + rightWidth);
-        if (widthSym < 0.40) continue;
+        if (widthSym < 0.50) continue; // tightened: shoulders must be more evenly spaced (was 0.40)
 
         // ── Shoulders shallow vs head & shouldn't sink far below neckline ──
         const leftShoulderDepth  = (necklineAt(leftSh)  - leftShPrice)  / (necklineAt(leftSh)  - headPrice);
@@ -1120,9 +1120,11 @@ function detectReverseHS(ohlcv, tol) {
             // The neckline itself is drawn as a spanning line (ghostNeck), so we
             // don't add vertical "Neckline" markers at the peaks here.
             keyLevels: [
-              { idx: leftSh,  label: "L Shoulder", color: "#6c8fff" },
-              { idx: head,    label: "Head",       color: "#ef5350" },
-              { idx: rightSh, label: "R Shoulder", color: "#6c8fff" },
+              { idx: leftSh,   label: "L Shoulder", color: "#6c8fff" },
+              { idx: leftPeak, label: "L Peak",     color: "#26a69a" },
+              { idx: head,     label: "Head",       color: "#ef5350" },
+              { idx: rightPeak,label: "R Peak",     color: "#26a69a" },
+              { idx: rightSh,  label: "R Shoulder", color: "#6c8fff" },
             ],
             // Radar — reuse the common axes
             radar: {
