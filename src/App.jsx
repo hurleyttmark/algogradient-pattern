@@ -3155,8 +3155,7 @@ export default function App() {
     const spanStrength = streaks.map(sk => Math.max(-3, Math.min(3, sk)));
 
     // Gradient score per bar: O(n) rolling 20-bar window
-    // Trailing window: score at bar i reflects exactly the 20 bars ending at i.
-    // Bars before a full window is available are left at 0 (no false early signal).
+    // BUG #8 FIX continued: single-pass using running bull/bear counters
     const GRAD_WIN = 20;
     const gradientScores = new Array(rows.length).fill(0);
     {
@@ -3168,10 +3167,7 @@ export default function App() {
           const old = candleSignals[i - GRAD_WIN];
           if (old > 0) bull--; else if (old < 0) bear--;
         }
-        // Only score once a full 20-bar window is available
-        if (i >= GRAD_WIN - 1) {
-          gradientScores[i] = Math.max(-1, Math.min(1, (bull - bear) / (GRAD_WIN * 0.5)));
-        }
+        gradientScores[i] = Math.max(-1, Math.min(1, (bull - bear) / 5));
       }
     }
 
@@ -4766,8 +4762,10 @@ export default function App() {
         {/* Gradient view — show current momentum stats, works for all setup types */}
         {det && chartSubTab === "gradient" && (() => {
           const isHSFamily = det.setupType === "hs" || det.setupType === "rt";
-          // Pull from radar first (always populated), then direct fields as fallback
-          const gradVal  = Math.round(((det.radar?.gradConf ?? det.gradConf ?? 0)) * 100);
+          // gradVal: read the last bar's rolling 20-bar gradient score from chartData
+          // (same value the momentum strip visualizes) — NOT the pattern arc conformance
+          const lastBarGrad = chartData.length > 0 ? (chartData[chartData.length - 1].gradientScore ?? 0) : 0;
+          const gradVal  = Math.round(((lastBarGrad + 1) / 2) * 100);  // remap −1..1 → 0..100
           const momVal   = Math.round((det.recentMomentum ?? 0.5) * 100);
           const brkVal   = Math.round((det.breakoutProx ?? det.radar?.breakoutProx ?? 0) * 100);
           const volVal   = Math.round((det.radar?.volumeConf ?? det.volConf ?? det.volScore ?? 0) * 100);
