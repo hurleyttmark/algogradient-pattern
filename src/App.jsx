@@ -787,7 +787,7 @@ function computeRHSAreaFit(smooth, ghostPts, headHeight) {
   }
   if (!count) return 0;
   const avgDevFraction = (dev / count) / headHeight;
-  return Math.max(0, 1 - avgDevFraction / 0.4);
+  return Math.max(0, 1 - avgDevFraction / 0.25); // tightened: max 25% deviation (was 40%)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -987,25 +987,65 @@ function detectReverseHS(ohlcv, tol) {
         });
         const areaFit = computeRHSAreaFit(smooth, ghostPts, headHeightForFit);
 
+        // ── Shoulder prominence: how defined are the shoulders ──
+        // A real shoulder has a clear low that is noticeably below the neckline.
+        // Shoulder prominence = how far each shoulder dips below its neckline point
+        // as a fraction of head depth. Ideal: 20–50% of head depth.
+        // Too shallow (<10%) = barely a dip, not a real shoulder.
+        // Too deep (>70%) = shoulder approaches head depth, poor separation.
+        const leftShProminence  = (necklineAt(leftSh)  - leftShPrice)  / headHeight;
+        const rightShProminence = (necklineAt(rightSh) - rightShPrice) / headHeight;
+        const avgShProminence   = (leftShProminence + rightShProminence) / 2;
+        // Hard gate: both shoulders must dip at least 10% of head depth
+        if (leftShProminence < 0.10 || rightShProminence < 0.10) continue;
+        // Score: ideal 20–50%, reward clear shoulders, penalize too shallow or too deep
+        const shoulderProminenceScore = avgShProminence >= 0.20 && avgShProminence <= 0.55
+          ? 1.0
+          : avgShProminence < 0.20
+            ? avgShProminence / 0.20
+            : Math.max(0, 1 - (avgShProminence - 0.55) / 0.25);
+        // Shoulder symmetry in prominence (both dip roughly equally)
+        const prominenceSym = leftShProminence > 0 && rightShProminence > 0
+          ? Math.min(leftShProminence, rightShProminence) / Math.max(leftShProminence, rightShProminence)
+          : 0;
+
         // ── Composite ──
-        // Three primary quality gates now scored:
-        //   headDepthScore    — head meaningfully lower than shoulders
-        //   headNecklineScore — head meaningfully below the neckline
-        //   necklineScore     — neckline near-horizontal
-        // Together these enforce the core textbook H&S requirements.
+        // Weighted around your five criteria:
+        //
+        // 1. DEFINED + PROMINENT SHOULDERS (25%)
+        //    shoulderSym + widthSym + shoulderProminenceScore + prominenceSym
+        //    Shoulders must be symmetric in height, width, AND dip depth.
+        //
+        // 2. LARGE SYMMETRIC HEAD (22%)
+        //    headDepthScore + headNecklineScore
+        //    Head must be meaningfully lower than both shoulders and neckline.
+        //
+        // 3. PRICE STAYS INSIDE IDEAL SHAPE (22%)
+        //    areaFit — tightened decay, most critical geometric quality.
+        //
+        // 4. FLAT SUSTAINED NECKLINE (18%)
+        //    necklineScore — near-horizontal peaks, consistent resistance level.
+        //
+        // 5. SECONDARY: shape quality, volume, duration (13%)
+        //    shapeScore, shallowScore, volScore, durationScore
         const composite =
-          headDepthScore    * 0.12 +
-          headNecklineScore * 0.10 +  // new: head must be well below neckline
-          shoulderSym       * 0.18 +
-          areaFit           * 0.11 +
-          widthSym          * 0.07 +
-          necklineScore     * 0.18 +  // near-horizontal neckline critical
-          shallowScore      * 0.06 +
-          shapeScore        * 0.08 +  // shoulder definition + head sharpness
-          durationScore     * 0.04 +
-          volScore          * 0.05 +
-          breakoutProx      * 0.01 +
-          volSurge          * 0.00;
+          // 1. Defined symmetric shoulders (25%)
+          shoulderSym             * 0.10 +
+          widthSym                * 0.06 +
+          shoulderProminenceScore * 0.06 +
+          prominenceSym           * 0.03 +
+          // 2. Large symmetric head (22%)
+          headDepthScore          * 0.12 +
+          headNecklineScore       * 0.10 +
+          // 3. Price inside ideal shape (22%)
+          areaFit                 * 0.22 +
+          // 4. Flat sustained neckline (18%)
+          necklineScore           * 0.18 +
+          // 5. Secondary quality (13%)
+          shapeScore              * 0.05 +
+          shallowScore            * 0.04 +
+          volScore                * 0.03 +
+          durationScore           * 0.01;
 
         if (composite > bestScore) {
           bestScore = composite;
