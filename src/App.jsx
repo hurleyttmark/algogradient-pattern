@@ -1300,7 +1300,7 @@ function detectHeadAndShoulders(ohlcv, tol) {
             shoulderSym, widthSym, necklineScore, shallowScore,
             shapeScore: shallowScore,
             durationScore, totalLen, necklineSlope, breakdownBar,
-            areaFit, volSurge, breakoutCleared,
+            areaFit, volSurge, breakoutCleared: breakdownCleared,
             leftShAbove, rightShAbove, headAboveNeck,
             necklineLeftIdx:   leftTrough,
             necklineLeftPrice: leftTroughPrice,
@@ -2474,8 +2474,7 @@ const DOMAIN_DEFS_CUP = [
   { id: "sector",       label: "Sector",         desc: "Sector-level momentum from the pulse heatmap — tailwind or headwind for this pattern.",           field: null,                                                                   relatedIds: ["volume", "pulse"] },
 ];
 
-/* Fixed domain definitions — Reverse Head & Shoulders
-   All scores read from detection.radar.* which is always populated for rhs detections */
+/* Fixed domain definitions — Reverse Head & Shoulders */
 const DOMAIN_DEFS_RHS = [
   { id: "shoulder_sym", label: "Shoulder Sym",   desc: "How symmetrical the two shoulders are in height and distance from the head.",  field: (d) => d?.shoulderSym   ?? d?.radar?.rimSymmetry  ?? 0, relatedIds: ["neckline", "breakout"] },
   { id: "head_depth",   label: "Head Depth",     desc: "Depth of the head trough — ideal 10-30%.",                                     field: (d) => d?.radar?.depthScore   ?? 0, relatedIds: ["shape_fit", "volume"] },
@@ -2485,6 +2484,29 @@ const DOMAIN_DEFS_RHS = [
   { id: "volume",       label: "Vol Surge",      desc: "Volume expansion confirming the neckline break.",                              field: (d) => d?.volSurge ?? d?.radar?.gradConf      ?? 0, relatedIds: ["head_depth", "pulse"] },
   { id: "pulse",        label: "Momentum",       desc: "Recent candle momentum approaching the neckline.",                             field: (d) => d?.recentMomentum ?? d?.radar?.recentMomentum ?? 0, relatedIds: ["volume", "breakout"] },
   { id: "sector",       label: "Sector",         desc: "Sector-level momentum — tailwind or headwind for this reversal.",              field: null,                                relatedIds: ["volume", "pulse"] },
+];
+
+/* Domain definitions — Head & Shoulders (bearish) */
+const DOMAIN_DEFS_HS = [
+  { id: "head_dom",     label: "Head Dominance", desc: "How much higher the head is above both shoulders — the primary H&S quality signal.",   field: (d) => d?.radar?.depthScore ?? 0,                                        relatedIds: ["neckline", "volume"] },
+  { id: "neckline",     label: "Neckline",       desc: "Neckline quality through the two inner troughs — near-horizontal scores highest.",      field: (d) => d?.necklineScore ?? d?.radar?.spanSymmetry ?? 0,                  relatedIds: ["head_dom", "breakdown"] },
+  { id: "shape_fit",    label: "Shape Fit",      desc: "How closely price hugs the textbook ∩-Λ-∩ outline.",                                   field: (d) => d?.areaFit ?? d?.radar?.areaSymmetry ?? 0,                        relatedIds: ["head_dom", "volume"] },
+  { id: "shoulder_sym", label: "Shoulder Sym",   desc: "Similarity of shoulders above the neckline. Real H&S can have asymmetric shoulders.",  field: (d) => d?.shoulderSym ?? d?.radar?.rimSymmetry ?? 0,                     relatedIds: ["neckline", "shape_fit"] },
+  { id: "breakdown",    label: "Breakdown Prox", desc: "How close price is to breaking the neckline — or has it already broken?",              field: (d) => d?.breakoutProx ?? d?.radar?.breakoutProx ?? 0,                   relatedIds: ["neckline", "volume"] },
+  { id: "volume",       label: "Volume Profile", desc: "Vol declining left→head→right shoulder, then surging on breakdown. Classic H&S tell.", field: (d) => d?.volConf ?? d?.radar?.volumeConf ?? 0,                          relatedIds: ["head_dom", "pulse"] },
+  { id: "pulse",        label: "Momentum",       desc: "Recent bearish candle momentum — confirms distribution phase.",                        field: (d) => d ? Math.max(0, 1 - (d.recentMomentum ?? 0.5) * 2) : 0,         relatedIds: ["volume", "breakdown"] },
+  { id: "sector",       label: "Sector",         desc: "Sector-level momentum — bearish sector tailwind strengthens the setup.",               field: null,                                                                     relatedIds: ["volume", "pulse"] },
+];
+
+/* Domain definitions — Rounded Top (bearish) */
+const DOMAIN_DEFS_RT = [
+  { id: "arc_shape",    label: "Arc Shape",      desc: "How cleanly price traces the inverted rounded top (∩). Area and span symmetry of the arc.", field: (d) => d ? ((d.areaSymmetry ?? 0) * 0.5 + (d.spanSymmetry ?? 0) * 0.5) : 0, relatedIds: ["gradient", "breakdown"] },
+  { id: "dist_shelf",   label: "Dist. Shelf",    desc: "Quality of the distribution shelf after the right rim — the bearish 'handle'.",            field: (d) => d ? Math.max(0, 1 - Math.abs((d.handleRetrace ?? 0.25) - 0.25) / 0.25) : 0, relatedIds: ["pulse", "breakdown"] },
+  { id: "gradient",     label: "Gradient Arc",   desc: "Smoothness of the descent arc — rising then falling, like an inverted cup.",               field: (d) => d ? (d.gradConf ?? 0) : 0,                                           relatedIds: ["arc_shape", "volume"] },
+  { id: "pulse",        label: "Bear Streak",    desc: "Recent bearish candle momentum in the distribution shelf zone.",                            field: (d) => d ? (d.pulseBonus ?? 0) : 0,                                         relatedIds: ["dist_shelf", "volume"] },
+  { id: "breakdown",    label: "Breakdown Prox", desc: "How close price is to breaking below the right rim level.",                                 field: (d) => d ? (d.breakoutProx ?? 0) : 0,                                       relatedIds: ["arc_shape", "dist_shelf"] },
+  { id: "volume",       label: "Volume",         desc: "Volume confirmation — high at rims, low at arc top (same bowl shape as cup, inverted).",    field: (d) => d ? Math.min(1, (d.volConf ?? 0)) : 0,                               relatedIds: ["gradient", "pulse"] },
+  { id: "sector",       label: "Sector",         desc: "Sector-level momentum — bearish sector tailwind strengthens the breakdown signal.",         field: null,                                                                        relatedIds: ["volume", "pulse"] },
 ];
 
 /* Legacy alias */
@@ -2506,9 +2528,14 @@ function computeRecencyMultiplier(barsFromEnd, totalBars) {
 }
 
 /* Build graph nodes from a detection object + optional sector pulse score.
-   recencyMult (0.25–1.0): older patterns get proportionally lower node scores. */
+   recencyMult (0.25–1.0): older patterns get proportionally lower node scores.
+   Routes to the correct domain definition set based on setupType. */
 function buildDomainNodes(detection, sectorPulse, recencyMult = 1.0) {
-  const defs = detection?.setupType === "rhs" ? DOMAIN_DEFS_RHS : DOMAIN_DEFS_CUP;
+  const type = detection?.setupType;
+  const defs = type === "rhs" ? DOMAIN_DEFS_RHS
+    : type === "hs" ? DOMAIN_DEFS_HS
+    : type === "rt" ? DOMAIN_DEFS_RT
+    : DOMAIN_DEFS_CUP;
   return defs.map(def => {
     const rawScore = def.field
       ? Math.max(0, Math.min(1, def.field(detection)))
