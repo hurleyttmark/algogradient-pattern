@@ -3155,8 +3155,7 @@ export default function App() {
     const spanStrength = streaks.map(sk => Math.max(-3, Math.min(3, sk)));
 
     // Gradient score per bar: O(n) rolling 20-bar window
-    // Trailing window: score at bar i reflects exactly the 20 bars ending at i.
-    // Bars before a full window is available are left at 0 (no false early signal).
+    // BUG #8 FIX continued: single-pass using running bull/bear counters
     const GRAD_WIN = 20;
     const gradientScores = new Array(rows.length).fill(0);
     {
@@ -3168,7 +3167,7 @@ export default function App() {
           const old = candleSignals[i - GRAD_WIN];
           if (old > 0) bull--; else if (old < 0) bear--;
         }
-        // Only score once a full 20-bar window is available
+        // Only score once a full window is available so early bars don't skew the strip
         if (i >= GRAD_WIN - 1) {
           gradientScores[i] = Math.max(-1, Math.min(1, (bull - bear) / (GRAD_WIN * 0.5)));
         }
@@ -4358,9 +4357,9 @@ export default function App() {
             </div>
           </div>
           {det && (
-            <div style={isMobile
-              ? { display: "flex", gap: 12, flexWrap: "nowrap", overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 2 }
-              : { display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: isMobile ? 6 : 12,
+              flexWrap: "nowrap", overflowX: "auto", WebkitOverflowScrolling: "touch",
+              paddingBottom: 2, msOverflowStyle: "none", scrollbarWidth: "none" }}>
               <StatPill label="Score" value={`${(det.score * 100).toFixed(1)}%`} color={COLORS.accent} />
               {/* Cup geometry — only on the Cup & Handle view, cup setups */}
               {chartSubTab === "pattern" && det.setupType !== "rhs" && det.setupType !== "hs" && (
@@ -4457,8 +4456,8 @@ export default function App() {
                     handleSetupChange(id, has);
                   }}
                   style={{
-                    padding: isMobile ? "6px 10px" : "11px 16px", borderRadius: 9,
-                    fontSize: isMobile ? 11 : 13, fontWeight: 700,
+                    padding: isMobile ? "5px 8px" : "11px 16px", borderRadius: 9,
+                    fontSize: isMobile ? 10 : 13, fontWeight: 700,
                     border: `1px solid ${activePattern === id ? color : COLORS.border}`,
                     background: activePattern === id ? `${color}22` : COLORS.surfaceHover,
                     color: activePattern === id ? color : (has ? COLORS.text : COLORS.textDim),
@@ -4478,8 +4477,8 @@ export default function App() {
                   <button
                     onClick={() => setChartSubTab("gradient")}
                     style={{
-                      padding: isMobile ? "6px 10px" : "11px 16px", borderRadius: 9,
-                      fontSize: isMobile ? 11 : 13, fontWeight: 700, flexShrink: 0,
+                      padding: isMobile ? "5px 8px" : "11px 16px", borderRadius: 9,
+                      fontSize: isMobile ? 10 : 13, fontWeight: 700, flexShrink: 0,
                       border: `1px solid ${chartSubTab === "gradient" ? COLORS.accent : COLORS.border}`,
                       background: chartSubTab === "gradient" ? COLORS.accentDim : COLORS.surfaceHover,
                       color: chartSubTab === "gradient" ? COLORS.accent : COLORS.text,
@@ -4766,10 +4765,10 @@ export default function App() {
         {/* Gradient view — show current momentum stats, works for all setup types */}
         {det && chartSubTab === "gradient" && (() => {
           const isHSFamily = det.setupType === "hs" || det.setupType === "rt";
-          // gradVal: read the last bar's rolling 20-bar gradient score from chartData
-          // (same value the momentum strip visualizes) — NOT the pattern arc conformance
+          // Pull from radar first (always populated), then direct fields as fallback
+          // Read the last bar's rolling 20-bar gradient from chartData — same source as the strip
           const lastBarGrad = chartData.length > 0 ? (chartData[chartData.length - 1].gradientScore ?? 0) : 0;
-          const gradVal  = Math.round(((lastBarGrad + 1) / 2) * 100);  // remap −1..1 → 0..100
+          const gradVal  = Math.round(((lastBarGrad + 1) / 2) * 100); // remap −1..1 → 0..100
           const momVal   = Math.round((det.recentMomentum ?? 0.5) * 100);
           const brkVal   = Math.round((det.breakoutProx ?? det.radar?.breakoutProx ?? 0) * 100);
           const volVal   = Math.round((det.radar?.volumeConf ?? det.volConf ?? det.volScore ?? 0) * 100);
