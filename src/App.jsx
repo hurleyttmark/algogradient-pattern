@@ -1082,8 +1082,12 @@ function detectHeadAndShoulders(ohlcv, tol) {
   let best = null;
   let bestScore = -1;
 
-  // Iterate over head candidates = the highest peaks
-  for (const head of maxima) {
+  // Iterate over head candidates = local maxima, seeded by the HIGHEST peaks first.
+  // This mirrors RHS's deepest-trough-first strategy and avoids wasting time on
+  // noise peaks that can't form valid shoulder structures.
+  const sortedMaxima = [...maxima].sort((a, b) => smooth[b] - smooth[a]);
+
+  for (const head of sortedMaxima) {
     const headPrice = smooth[head];
 
     // Left shoulder: a local max to the LEFT of the head, lower than head
@@ -1092,13 +1096,17 @@ function detectHeadAndShoulders(ohlcv, tol) {
     const rightShCandidates = maxima.filter(m => m > head + 15 && smooth[m] < headPrice && m < n - 5);
     if (!leftShCandidates.length || !rightShCandidates.length) continue;
 
-    for (const leftSh of leftShCandidates) {
+    // Only consider the highest left shoulder and a few highest right shoulders to limit combos
+    const topLeft = [...leftShCandidates].sort((a, b) => smooth[b] - smooth[a]).slice(0, 3);
+    const topRight = [...rightShCandidates].sort((a, b) => smooth[b] - smooth[a]).slice(0, 3);
+
+    for (const leftSh of topLeft) {
       // Inner-left trough: deepest min between left shoulder and head
       const ltCands = minima.filter(m => m > leftSh && m < head);
       if (!ltCands.length) continue;
       const leftTrough = ltCands.reduce((a, b) => smooth[a] < smooth[b] ? a : b);
 
-      for (const rightSh of rightShCandidates) {
+      for (const rightSh of topRight) {
         // Inner-right trough: deepest min between head and right shoulder
         const rtCands = minima.filter(m => m > head && m < rightSh);
         if (!rtCands.length) continue;
@@ -1113,26 +1121,31 @@ function detectHeadAndShoulders(ohlcv, tol) {
 
         // Head height above shoulders (ideal 10–30%, max ~50%)
         const headDepth = (headPrice - shoulderAvg) / shoulderAvg;
-        if (headDepth < 0.05 || headDepth > 0.50) continue;
+        if (headDepth < 0.05 || headDepth > 0.55) continue;
         let headDepthScore;
         if (headDepth >= 0.10 && headDepth <= 0.30) headDepthScore = 1.0;
         else if (headDepth < 0.10) headDepthScore = headDepth / 0.10;
-        else headDepthScore = Math.max(0, 1 - (headDepth - 0.30) / 0.20);
+        else headDepthScore = Math.max(0, 1 - (headDepth - 0.30) / 0.25);
 
         // Duration
         const totalLen = rightSh - leftSh;
         if (totalLen < MIN_TOTAL || totalLen > MAX_TOTAL) continue;
         const durationScore = Math.max(0, Math.exp(-Math.pow((totalLen - IDEAL_TOTAL) / (IDEAL_TOTAL * 0.55), 2)));
 
-        // Shoulder symmetry (price)
+        // Shoulder symmetry — loosened from 0.90 to 0.75.
+        // Classic H&S often has a left shoulder formed during an uptrend (slightly
+        // higher) and right shoulder during distribution (slightly lower). 10% gap
+        // is common and valid; the hard gate was eliminating real setups.
         const shoulderSym = 1 - Math.abs(leftShPrice - rightShPrice) / shoulderAvg;
-        if (shoulderSym < 0.90) continue;
+        if (shoulderSym < 0.75) continue;
 
-        // Neckline through the two inner troughs
+        // Neckline through the two inner troughs — loosened tilt gate from 0.10 → 0.20.
+        // A rising neckline (right trough higher than left) is actually a more reliable
+        // H&S variant. Killing all tilted necklines was too aggressive.
         const troughAvg = (leftTroughPrice + rightTroughPrice) / 2;
         const necklineTilt = Math.abs(rightTroughPrice - leftTroughPrice) / (troughAvg || 1);
-        if (necklineTilt > 0.10) continue;
-        const necklineScore = Math.max(0, 1 - necklineTilt / 0.10);
+        if (necklineTilt > 0.20) continue;
+        const necklineScore = Math.max(0, 1 - necklineTilt / 0.20);
 
         const necklineSlope = (rightTroughPrice - leftTroughPrice) / (rightTrough - leftTrough);
         const necklineAt = (idx) => leftTroughPrice + necklineSlope * (idx - leftTrough);
