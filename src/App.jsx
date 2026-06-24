@@ -1876,15 +1876,20 @@ const PulseChart = ({ data }) => {
       pc.restore();
     }
 
-    // ── X-axis date labels (bigger) ──
+    // ── X-axis date labels ──
     pc.save();
     pc.fillStyle = "#9aa6d4";
-    pc.font = "11px 'Courier New', monospace";
     pc.textAlign = "center";
     pc.textBaseline = "alphabetic";
-    const labelStep = Math.max(1, Math.floor(n / 7));
+    // On narrow screens show fewer labels and use a shorter date string
+    const maxLabels = W < 500 ? 4 : W < 800 ? 5 : 7;
+    const labelStep = Math.max(1, Math.floor(n / maxLabels));
+    pc.font = W < 500 ? "10px 'Courier New', monospace" : "11px 'Courier New', monospace";
     for (let i = 0; i < n; i += labelStep) {
-      pc.fillText(data[i].dateStr || "", toX(i), PRICE_H - 10);
+      const raw = data[i].dateStr || "";
+      // On mobile shorten "Jan 5, 21" → "Jan '21" to avoid overlap
+      const label = W < 500 ? raw.replace(/\s+\d+,\s+/, " '") : raw;
+      pc.fillText(label, toX(i), PRICE_H - 10);
     }
     pc.restore();
 
@@ -4004,7 +4009,7 @@ export default function App() {
                         stroke={COLORS.green}
                         strokeWidth={2}
                         strokeDasharray="6 4"
-                        label={{ value: "Neckline", fill: COLORS.green, fontSize: 10, position: "insideTopLeft" }}
+                        label={isMobile ? undefined : { value: "Neckline", fill: COLORS.green, fontSize: 10, position: "insideTopLeft" }}
                       />
                     )}
                     {/* Reference lines — keyLevels for RHS, named indices for cup. */}
@@ -4016,16 +4021,45 @@ export default function App() {
                         { idx: det.rightRim, label: "R Rim", color: COLORS.cup },
                         { idx: det.handleMinIdx, label: "Handle", color: COLORS.handle },
                       ]
-                    ).map(({ idx, label, color }) => (
+                    ).map(({ idx, label, color }, i) => (
                       <ReferenceLine
                         key={label} x={idx}
                         stroke={color} strokeDasharray="4 3" strokeWidth={1.5}
-                        label={{ value: label, fill: color, fontSize: 10, position: "insideTopRight" }}
+                        label={isMobile ? undefined : {
+                          value: label, fill: color, fontSize: 10,
+                          position: i % 2 === 0 ? "insideTopRight" : "insideBottomRight"
+                        }}
                       />
                     ))}
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+
+              {/* Mobile-only label legend (replaces overlapping in-chart labels) */}
+              {isMobile && det && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "2px 8px" }}>
+                  {(det.setupType === "rhs"
+                    ? (det.keyLevels || [])
+                    : [
+                      { label: "L Rim",  color: COLORS.cup },
+                      { label: "Bottom", color: COLORS.accent },
+                      { label: "R Rim",  color: COLORS.cup },
+                      { label: "Handle", color: COLORS.handle },
+                    ]
+                  ).map(({ label, color }) => (
+                    <div key={label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <div style={{ width: 2, height: 12, background: color, borderRadius: 1, opacity: 0.9 }} />
+                      <span style={{ fontSize: 10, color, fontWeight: 600 }}>{label}</span>
+                    </div>
+                  ))}
+                  {det.setupType === "rhs" && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <div style={{ width: 12, height: 2, background: COLORS.green, borderRadius: 1 }} />
+                      <span style={{ fontSize: 10, color: COLORS.green, fontWeight: 600 }}>Neckline</span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Volume bars */}
               <div style={{ height: 80 }}>
