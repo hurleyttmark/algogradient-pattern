@@ -745,24 +745,15 @@ function buildRHSGhost(p) {
     necklineAt,
   } = p;
 
-  // Draw closed triangles for each shoulder and the head:
-  //   Left shoulder:  neckline@leftSh  → leftSh-low  → neckline@leftPeak
-  //   Head:           neckline@leftPeak → head-low    → neckline@rightPeak
-  //   Right shoulder: neckline@rightPeak → rightSh-low → neckline@rightSh
-  // This produces the correct "M"-shaped textbook outline where every
-  // component touches the neckline at both its entry and exit points.
+  // Ordered anchor points the outline passes through.
   const anchors = [
-    { idx: leftSh,    y: necklineAt(leftSh) },    // start on neckline above L shoulder
-    { idx: leftSh,    y: leftShPrice },            // dip to L shoulder low
-    { idx: leftPeak,  y: necklineAt(leftPeak) },  // rise back to neckline at L peak
-    { idx: leftPeak,  y: leftPeakPrice },          // touch inner-left peak (RHS) or trough (HS)
-    { idx: head,      y: headPrice },              // head extreme
-    { idx: rightPeak, y: rightPeakPrice },         // inner-right peak/trough
-    { idx: rightPeak, y: necklineAt(rightPeak) }, // back to neckline at R peak
-    { idx: rightSh,   y: rightShPrice },           // dip to R shoulder low
-    { idx: rightSh,   y: necklineAt(rightSh) },   // close the R shoulder triangle on neckline
+    { idx: leftSh,    y: leftShPrice },
+    { idx: leftPeak,  y: leftPeakPrice },
+    { idx: head,      y: headPrice },
+    { idx: rightPeak, y: rightPeakPrice },
+    { idx: rightSh,   y: rightShPrice },
   ];
-  // Extend to the breakout bar at the neckline level (the post-pattern continuation).
+  // Extend to the breakout bar at the neckline level (the post-pattern rise).
   if (breakoutBar > rightSh) {
     anchors.push({ idx: breakoutBar, y: necklineAt(breakoutBar) });
   }
@@ -771,23 +762,16 @@ function buildRHSGhost(p) {
   for (let a = 0; a < anchors.length - 1; a++) {
     const A = anchors[a], B = anchors[a + 1];
     const w = B.idx - A.idx;
-    if (w === 0) {
-      // Vertical jump (same idx, different y) — emit both endpoints
-      pts.push({ idx: A.idx, ghostShape: A.y, ghostNeck: necklineAt(A.idx) });
-      pts.push({ idx: B.idx, ghostShape: B.y, ghostNeck: necklineAt(B.idx) });
-      continue;
-    }
-    if (w < 0) continue;
+    if (w <= 0) continue;
     for (let i = A.idx; i <= B.idx; i++) {
       const t = (i - A.idx) / w;
-      const y = A.y + (B.y - A.y) * t;
+      const y = A.y + (B.y - A.y) * t;          // straight segment A→B
       pts.push({ idx: i, ghostShape: y, ghostNeck: necklineAt(i) });
     }
   }
-  // de-dupe: for duplicate indices keep the last value so vertical jumps resolve correctly
-  const map = new Map();
-  for (const pt of pts) map.set(pt.idx, pt);
-  return [...map.values()].sort((a, b) => a.idx - b.idx);
+  // de-dupe shared anchor indices
+  const seen = new Set();
+  return pts.filter(pt => (seen.has(pt.idx) ? false : (seen.add(pt.idx), true)));
 }
 
 // Area-fit: how tightly real price hugs the ideal U-V-U ghost (mirrors the cup's
@@ -1123,12 +1107,12 @@ function detectReverseHS(ohlcv, tol) {
             headDepth, shoulderSym, widthSym, necklineScore, shallowScore,
             shapeScore, durationScore, totalLen, necklineSlope, breakoutBar,
             areaFit,
-            // Neckline now spans from the outer edge of L shoulder to R shoulder
-            // so it frames all three triangles correctly.
-            necklineLeftIdx:   leftSh,
-            necklineLeftPrice: necklineAt(leftSh),
-            necklineRightIdx:  rightSh,
-            necklineRightPrice: necklineAt(rightSh),
+            // Sloped neckline through the two real peaks (angled if peaks
+            // differ in height). necklineScore rates how level it is.
+            necklineLeftIdx:   leftPeak,
+            necklineLeftPrice: leftPeakPrice,
+            necklineRightIdx:  rightPeak,
+            necklineRightPrice: rightPeakPrice,
             necklineEnd: Math.min(n - 1, rightSh + Math.round(rightWidth)),
             necklineEndPrice: necklineAt(Math.min(n - 1, rightSh + Math.round(rightWidth))),
             volSurge, breakoutCleared,
@@ -1344,44 +1328,29 @@ function detectHeadAndShoulders(ohlcv, tol) {
         const volSurge = Math.max(0, Math.min(1, (breakVol / avgVolAll - 1) / 0.5));
 
         // ── Area fit ──────────────────────────────────────────────────────
-        // Draw closed triangles at each shoulder and the head so the overlay
-        // matches the textbook "W with a raised centre" pattern:
-        //   Left shoulder:  neckline@leftSh → leftSh-peak → neckline@leftTrough
-        //   Head:           neckline@leftTrough → head-peak → neckline@rightTrough
-        //   Right shoulder: neckline@rightTrough → rightSh-peak → neckline@rightSh
         const anchors = [
-          { idx: leftSh,      y: necklineAt(leftSh) },       // start on neckline above L shoulder
-          { idx: leftSh,      y: leftShPrice },               // rise to L shoulder peak
-          { idx: leftTrough,  y: necklineAt(leftTrough) },   // return to neckline at L trough
-          { idx: leftTrough,  y: leftTroughPrice },           // touch inner-left trough
-          { idx: head,        y: headPrice },                 // head peak
-          { idx: rightTrough, y: rightTroughPrice },          // inner-right trough
-          { idx: rightTrough, y: necklineAt(rightTrough) },  // back to neckline at R trough
-          { idx: rightSh,     y: rightShPrice },              // rise to R shoulder peak
-          { idx: rightSh,     y: necklineAt(rightSh) },      // close the R shoulder triangle
+          { idx: leftSh,      y: leftShPrice },
+          { idx: leftTrough,  y: leftTroughPrice },
+          { idx: head,        y: headPrice },
+          { idx: rightTrough, y: rightTroughPrice },
+          { idx: rightSh,     y: rightShPrice },
         ];
         if (breakdownBar > rightSh) anchors.push({ idx: breakdownBar, y: necklineAt(breakdownBar) });
         const ghostPts = [];
+        const seenHS = new Set();
         for (let a = 0; a < anchors.length - 1; a++) {
           const A = anchors[a], B = anchors[a + 1];
           const w = B.idx - A.idx;
-          if (w === 0) {
-            ghostPts.push({ idx: A.idx, ghostShape: A.y, ghostNeck: necklineAt(A.idx) });
-            ghostPts.push({ idx: B.idx, ghostShape: B.y, ghostNeck: necklineAt(B.idx) });
-            continue;
-          }
-          if (w < 0) continue;
+          if (w <= 0) continue;
           for (let i = A.idx; i <= B.idx; i++) {
+            if (seenHS.has(i)) continue;
+            seenHS.add(i);
             const t = (i - A.idx) / w;
             ghostPts.push({ idx: i, ghostShape: A.y + (B.y - A.y) * t, ghostNeck: necklineAt(i) });
           }
         }
-        // de-dupe: keep last value for each idx so vertical jumps resolve correctly
-        const hsMap = new Map();
-        for (const pt of ghostPts) hsMap.set(pt.idx, pt);
-        const dedupedGhostPts = [...hsMap.values()].sort((a, b) => a.idx - b.idx);
         let areaFitDev = 0, areaFitCount = 0;
-        for (const g of dedupedGhostPts) {
+        for (const g of ghostPts) {
           const px = smooth[g.idx];
           if (px == null) continue;
           areaFitDev += Math.abs(px - g.ghostShape);
@@ -1432,10 +1401,10 @@ function detectHeadAndShoulders(ohlcv, tol) {
             durationScore, totalLen, necklineSlope, breakdownBar,
             areaFit, volSurge, breakoutCleared: breakdownCleared,
             leftShAbove, rightShAbove, headAboveNeck,
-            necklineLeftIdx:   leftSh,
-            necklineLeftPrice: necklineAt(leftSh),
-            necklineRightIdx:  rightSh,
-            necklineRightPrice: necklineAt(rightSh),
+            necklineLeftIdx:   leftTrough,
+            necklineLeftPrice: leftTroughPrice,
+            necklineRightIdx:  rightTrough,
+            necklineRightPrice: rightTroughPrice,
             necklineEnd: Math.min(n - 1, rightSh + Math.round(rightWidth)),
             necklineEndPrice: necklineAt(Math.min(n - 1, rightSh + Math.round(rightWidth))),
             keyLevels: [
@@ -1456,7 +1425,7 @@ function detectHeadAndShoulders(ohlcv, tol) {
               recentMomentum: computeRecentMomentum(ohlcv, 10),
               necklineScore, widthSym, shoulderSym,
             },
-            ghostCurve: dedupedGhostPts,
+            ghostCurve: ghostPts,
           };
         }
       }
