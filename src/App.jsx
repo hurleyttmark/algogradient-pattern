@@ -790,6 +790,45 @@ function computeRHSAreaFit(smooth, ghostPts, headHeight) {
   return Math.max(0, 1 - avgDevFraction / 0.25); // tightened: max 25% deviation (was 40%)
 }
 
+// ─── Flat-Neckline Area Score ─────────────────────────────────────────────────
+// Measures how much "filled" area exists between price and a perfectly flat
+// neckline across the entire pattern span (leftSh → rightSh).
+//
+// For Reverse H&S (bullish):
+//   flatNeck = average of the two inner peak prices.
+//   Each bar where price is BELOW the flat neckline contributes (flatNeck - price).
+//   The total is normalized by (headHeight × patternWidth) so that a deeper, wider
+//   pattern with both shoulders and head fully enclosed scores 1.0.
+//   Higher score = more pronounced pattern = better.
+//
+// For H&S (bearish):
+//   flatNeck = average of the two trough prices.
+//   Each bar where price is ABOVE the flat neckline contributes (price - flatNeck).
+//   Same normalization: higher score = more dominant head / shoulder structure.
+//
+// direction: "below" (RHS) or "above" (HS)
+function computeFlatNecklineArea(smooth, startIdx, endIdx, flatNeck, headHeight, direction) {
+  if (headHeight <= 0 || endIdx <= startIdx) return 0;
+  const patternWidth = endIdx - startIdx;
+  let totalArea = 0;
+  for (let i = startIdx; i <= endIdx; i++) {
+    const px = smooth[i];
+    if (px == null) continue;
+    const contribution = direction === "below"
+      ? Math.max(0, flatNeck - px)   // RHS: bars that dip below flat neckline
+      : Math.max(0, px - flatNeck);  // H&S: bars that rise above flat neckline
+    totalArea += contribution;
+  }
+  // Maximum possible area = headHeight × patternWidth (if every bar sat at the head extreme)
+  const maxArea = headHeight * patternWidth;
+  if (maxArea <= 0) return 0;
+  // Raw ratio — clamp to [0, 1]. Patterns where both shoulders AND head are prominent
+  // accumulate more area and naturally score higher.
+  return Math.min(1, totalArea / (maxArea * 0.45));
+  // 0.45 calibration: a textbook pattern where the head fills ~30% of max area
+  // and both shoulders ~7-10% each should score ~0.8–0.95.
+}
+
 // ═══════════════════════════════════════════════════════════════
 // REVERSE HEAD & SHOULDERS DETECTOR (v12)
 // ───────────────────────────────────────────────────────────────
@@ -987,6 +1026,15 @@ function detectReverseHS(ohlcv, tol) {
         });
         const areaFit = computeRHSAreaFit(smooth, ghostPts, headHeightForFit);
 
+        // ── Flat-neckline area score (PRIMARY area signal) ──
+        // flatNeck = average of the two inner peak prices → perfectly horizontal reference.
+        // Score rewards patterns where price stays well below this flat line across the
+        // full span: deeper head + prominent shoulders = more area below = higher score.
+        const flatNeckLevel = (leftPeakPrice + rightPeakPrice) / 2;
+        const flatNecklineAreaScore = computeFlatNecklineArea(
+          smooth, leftSh, rightSh, flatNeckLevel, headHeight, "below"
+        );
+
         // ── Shoulder prominence: how defined are the shoulders ──
         // A real shoulder has a clear low that is noticeably below the neckline.
         // Shoulder prominence = how far each shoulder dips below its neckline point
@@ -1037,8 +1085,11 @@ function detectReverseHS(ohlcv, tol) {
           // 2. Large symmetric head (22%)
           headDepthScore          * 0.12 +
           headNecklineScore       * 0.10 +
-          // 3. Price inside ideal shape (22%)
-          areaFit                 * 0.22 +
+          // 3. Area below flat neckline — deeper/wider pattern scores higher (22%)
+          // Primary (18%): flat neckline area across full shoulder span.
+          // Secondary (4%): ghost-curve shape conformance (penalises jagged price).
+          flatNecklineAreaScore   * 0.18 +
+          areaFit                 * 0.04 +
           // 4. Flat sustained neckline (18%)
           necklineScore           * 0.18 +
           // 5. Secondary quality (13%)
@@ -1070,6 +1121,8 @@ function detectReverseHS(ohlcv, tol) {
             headDepth, shoulderSym, widthSym, necklineScore, shallowScore,
             shapeScore, durationScore, totalLen, necklineSlope, breakoutBar,
             areaFit,
+            flatNecklineAreaScore,
+            flatNeckLevel,
             // Sloped neckline through the two real peaks (angled if peaks
             // differ in height). necklineScore rates how level it is.
             necklineLeftIdx:   leftPeak,
@@ -1090,7 +1143,7 @@ function detectReverseHS(ohlcv, tol) {
             // Radar — reuse the common axes
             radar: {
               rimSymmetry: shoulderSym,
-              areaSymmetry: areaFit,
+              areaSymmetry: flatNecklineAreaScore,  // flat-neckline area fill
               spanSymmetry: widthSym,
               depthScore: headDepthScore,
               handleQuality: shapeScore,
@@ -1319,6 +1372,15 @@ function detectHeadAndShoulders(ohlcv, tol) {
         }
         const areaFit = areaFitCount ? Math.max(0, 1 - (areaFitDev / areaFitCount) / (headAboveNeck * 0.6)) : 0;
 
+        // ── Flat-neckline area score (PRIMARY area signal for H&S) ──
+        // flatNeck = average of the two trough prices → perfectly horizontal reference.
+        // Score rewards patterns where price rises well ABOVE this flat line across
+        // the full span: taller head + prominent shoulders = more area above = higher score.
+        const hsNeckAvg = (leftTroughPrice + rightTroughPrice) / 2;
+        const flatNecklineAreaScore = computeFlatNecklineArea(
+          smooth, leftSh, rightSh, hsNeckAvg, headAboveNeck, "above"
+        );
+
         // ── Shoulder shallowness: both shoulders should be between 20-80% of head height ──
         const leftFrac  = leftShAbove  / headAboveNeck;
         const rightFrac = rightShAbove / headAboveNeck;
@@ -1332,7 +1394,8 @@ function detectHeadAndShoulders(ohlcv, tol) {
         const composite =
           headDepthScore * 0.20 +   // head dominance is primary
           shoulderSym    * 0.10 +   // soft — real patterns have asymmetric shoulders
-          areaFit        * 0.12 +
+          flatNecklineAreaScore * 0.10 +  // flat-neckline area fill (primary)
+          areaFit        * 0.02 +         // ghost-curve conformance (secondary)
           widthSym       * 0.08 +
           necklineScore  * 0.14 +
           shallowScore   * 0.08 +
@@ -1360,7 +1423,7 @@ function detectHeadAndShoulders(ohlcv, tol) {
             shoulderSym, widthSym, necklineScore, shallowScore,
             shapeScore: shallowScore,
             durationScore, totalLen, necklineSlope, breakdownBar,
-            areaFit, volSurge, breakoutCleared: breakdownCleared,
+            areaFit, flatNecklineAreaScore, volSurge, breakoutCleared: breakdownCleared,
             leftShAbove, rightShAbove, headAboveNeck,
             necklineLeftIdx:   leftTrough,
             necklineLeftPrice: leftTroughPrice,
@@ -1375,7 +1438,7 @@ function detectHeadAndShoulders(ohlcv, tol) {
             ],
             radar: {
               rimSymmetry: shoulderSym,
-              areaSymmetry: areaFit,
+              areaSymmetry: flatNecklineAreaScore,  // flat-neckline area fill
               spanSymmetry: widthSym,
               depthScore: headDepthScore,
               handleQuality: shallowScore,
