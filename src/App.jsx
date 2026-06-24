@@ -1039,6 +1039,9 @@ function detectReverseHS(ohlcv, tol) {
               gradConf: volSurge,
               pulseStr: breakoutProx,
               recentMomentum: computeRecentMomentum(ohlcv, 10),
+              necklineScore,
+              widthSym,
+              shoulderSym,
             },
             ghostCurve,
           };
@@ -1957,13 +1960,13 @@ const DOMAIN_DEFS_CUP = [
 /* Fixed domain definitions — Reverse Head & Shoulders
    All scores read from detection.radar.* which is always populated for rhs detections */
 const DOMAIN_DEFS_RHS = [
-  { id: "shoulder_sym", label: "Shoulder Sym",   desc: "How symmetrical the two shoulders are in height and distance from the head.",  field: (d) => d?.radar?.rimSymmetry  ?? 0, relatedIds: ["neckline", "breakout"] },
+  { id: "shoulder_sym", label: "Shoulder Sym",   desc: "How symmetrical the two shoulders are in height and distance from the head.",  field: (d) => d?.shoulderSym   ?? d?.radar?.rimSymmetry  ?? 0, relatedIds: ["neckline", "breakout"] },
   { id: "head_depth",   label: "Head Depth",     desc: "Depth of the head trough — ideal 10-30%.",                                     field: (d) => d?.radar?.depthScore   ?? 0, relatedIds: ["shape_fit", "volume"] },
-  { id: "shape_fit",    label: "Shape Fit",      desc: "How well the W-shape conforms to textbook reverse H&S.",                       field: (d) => d?.radar?.handleQuality ?? 0, relatedIds: ["head_depth", "neckline"] },
-  { id: "neckline",     label: "Neckline",       desc: "Neckline quality — near-horizontal scores highest.",                           field: (d) => d?.radar?.areaSymmetry  ?? 0, relatedIds: ["shoulder_sym", "breakout"] },
-  { id: "breakout",     label: "Breakout Prox",  desc: "Closeness to neckline breakout trigger.",                                      field: (d) => d?.radar?.breakoutProx  ?? 0, relatedIds: ["neckline", "volume"] },
-  { id: "volume",       label: "Vol Surge",      desc: "Volume expansion confirming the neckline break.",                              field: (d) => d?.radar?.gradConf      ?? 0, relatedIds: ["head_depth", "pulse"] },
-  { id: "pulse",        label: "Momentum",       desc: "Recent candle momentum approaching the neckline.",                             field: (d) => d?.radar?.recentMomentum ?? 0, relatedIds: ["volume", "breakout"] },
+  { id: "shape_fit",    label: "Shape Fit",      desc: "How well the W-shape conforms to textbook reverse H&S.",                       field: (d) => d?.areaFit ?? d?.radar?.areaSymmetry ?? d?.radar?.handleQuality ?? 0, relatedIds: ["head_depth", "neckline"] },
+  { id: "neckline",     label: "Neckline",       desc: "Neckline quality — near-horizontal scores highest.",                           field: (d) => d?.necklineScore ?? d?.radar?.spanSymmetry  ?? 0, relatedIds: ["shoulder_sym", "breakout"] },
+  { id: "breakout",     label: "Breakout Prox",  desc: "Closeness to neckline breakout trigger.",                                      field: (d) => d?.breakoutProx ?? d?.radar?.breakoutProx  ?? 0, relatedIds: ["neckline", "volume"] },
+  { id: "volume",       label: "Vol Surge",      desc: "Volume expansion confirming the neckline break.",                              field: (d) => d?.volSurge ?? d?.radar?.gradConf      ?? 0, relatedIds: ["head_depth", "pulse"] },
+  { id: "pulse",        label: "Momentum",       desc: "Recent candle momentum approaching the neckline.",                             field: (d) => d?.recentMomentum ?? d?.radar?.recentMomentum ?? 0, relatedIds: ["volume", "breakout"] },
   { id: "sector",       label: "Sector",         desc: "Sector-level momentum — tailwind or headwind for this reversal.",              field: null,                                relatedIds: ["volume", "pulse"] },
 ];
 
@@ -2731,39 +2734,43 @@ export default function App() {
     let entries;
     if (chartSubTab === "gradient") {
       entries = [
-        { key: "gradConf",       label: "Gradient" },
-        { key: "pulseStr",       label: "Pulse" },
-        { key: "recentMomentum", label: "Momentum" },
-        { key: "breakoutProx",   label: "Breakout" },
-        { key: "volumeConf",     label: "Volume" },
+        { key: "gradConf",       label: "Gradient",  direct: "gradConf" },
+        { key: "pulseStr",       label: "Pulse",     direct: "pulseBonus" },
+        { key: "recentMomentum", label: "Momentum",  direct: "recentMomentum" },
+        { key: "breakoutProx",   label: "Breakout",  direct: "breakoutProx" },
+        { key: "volumeConf",     label: "Volume",    direct: null },
       ];
     } else if (isRHS) {
       entries = [
-        { key: "rimSymmetry",  label: "Shoulder Sym" },
-        { key: "areaSymmetry", label: "Shape Fit" },
-        { key: "spanSymmetry", label: "Width Sym" },
-        { key: "depthScore",   label: "Head Depth" },
-        { key: "handleQuality",label: "U/V Shape" },
-        { key: "breakoutProx", label: "Brk Prox" },
-        { key: "volumeConf",   label: "Volume" },
-        { key: "gradConf",     label: "Brk Vol" },
+        { key: "rimSymmetry",  label: "Shoulder Sym", direct: "shoulderSym" },
+        { key: "areaSymmetry", label: "Shape Fit",    direct: "areaFit" },
+        { key: "spanSymmetry", label: "Width Sym",    direct: "widthSym" },
+        { key: "depthScore",   label: "Head Depth",   direct: null },
+        { key: "handleQuality",label: "U/V Shape",    direct: "shapeScore" },
+        { key: "breakoutProx", label: "Brk Prox",     direct: "breakoutProx" },
+        { key: "volumeConf",   label: "Volume",       direct: "volScore" },
+        { key: "gradConf",     label: "Brk Vol",      direct: "volSurge" },
+        { key: "recentMomentum", label: "Momentum",   direct: "recentMomentum" },
+        { key: "necklineScore",  label: "Neckline",   direct: "necklineScore" },
       ];
     } else {
       entries = [
-        { key: "rimSymmetry",  label: "Rim Sym" },
-        { key: "areaSymmetry", label: "Area Sym" },
-        { key: "spanSymmetry", label: "Span Sym" },
-        { key: "depthScore",   label: "Depth" },
-        { key: "handleQuality",label: "Handle" },
-        { key: "breakoutProx", label: "Breakout" },
-        { key: "volumeConf",   label: "Volume" },
-        { key: "gradConf",     label: "Gradient" },
+        { key: "rimSymmetry",  label: "Rim Sym",  direct: null },
+        { key: "areaSymmetry", label: "Area Sym", direct: "areaSymmetry" },
+        { key: "spanSymmetry", label: "Span Sym", direct: "spanSymmetry" },
+        { key: "depthScore",   label: "Depth",    direct: null },
+        { key: "handleQuality",label: "Handle",   direct: null },
+        { key: "breakoutProx", label: "Breakout", direct: "breakoutProx" },
+        { key: "volumeConf",   label: "Volume",   direct: null },
+        { key: "gradConf",     label: "Gradient", direct: "gradConf" },
       ];
     }
-    return entries.map(({ key, label }) => ({
-      metric: label,
-      value: Math.round((selectedDetection.radar[key] || 0) * 100)
-    }));
+    return entries.map(({ key, label, direct }) => {
+      const radarVal = selectedDetection.radar?.[key] ?? 0;
+      const directVal = direct ? (selectedDetection[direct] ?? 0) : 0;
+      const val = radarVal > 0 ? radarVal : directVal;
+      return { metric: label, value: Math.round(val * 100) };
+    });
   }, [selectedDetection, chartSubTab]);
 
   // ── Filtered scores ──
@@ -3027,10 +3034,11 @@ export default function App() {
   const S = {
     app: {
       background: COLORS.bg, color: COLORS.text,
-      height: "100%",
+      height: isMobile ? "auto" : "100%",
+      minHeight: isMobile ? "100dvh" : undefined,
       fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
       display: "flex", flexDirection: "column", fontSize: 14,
-      overflow: "hidden",
+      overflow: isMobile ? "visible" : "hidden",
       width: "100%", maxWidth: "100vw",
       boxSizing: "border-box",
     },
@@ -3041,14 +3049,14 @@ export default function App() {
     },
     logo: { fontSize: 17, fontWeight: 800, color: COLORS.accent, letterSpacing: "-0.5px", whiteSpace: "nowrap" },
     logoSub: { fontSize: 11, color: COLORS.textMuted, marginLeft: 8 },
-    main: { display: "flex", flex: 1, minHeight: 0, overflow: "hidden", flexDirection: isMobile ? "column" : "row" },
+    main: { display: "flex", flex: 1, minHeight: isMobile ? "auto" : 0, overflow: isMobile ? "visible" : "hidden", flexDirection: isMobile ? "column" : "row" },
     sidebar: isMobile ? { display: "none" } : {
       width: 272, flexShrink: 0, background: COLORS.surface,
       borderRight: `1px solid ${COLORS.border}`,
       display: "flex", flexDirection: "column", overflow: "hidden"
     },
     sidebarScroll: { flex: 1, overflowY: "auto", padding: 14 },
-    content: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" },
+    content: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden" },
     tabBar: {
       display: isMobile ? "none" : "flex", borderBottom: `1px solid ${COLORS.border}`,
       background: COLORS.surface, flexShrink: 0, padding: "0 4px"
@@ -3060,7 +3068,7 @@ export default function App() {
       cursor: "pointer", background: "none", border: "none",
       outline: "none", transition: "color 0.15s", whiteSpace: "nowrap"
     }),
-    panel: { flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, minWidth: 0, paddingBottom: isMobile ? 80 : 0, overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" },
+    panel: { flex: 1, overflowY: isMobile ? "visible" : "auto", overflowX: "hidden", minHeight: isMobile ? "auto" : 0, minWidth: 0, paddingBottom: isMobile ? 80 : 0, overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" },
     card: {
       background: COLORS.surfaceHover, border: `1px solid ${COLORS.border}`,
       borderRadius: 10, padding: 14, marginBottom: 10
@@ -3708,8 +3716,8 @@ export default function App() {
       <div style={{ display: "flex", flexDirection: "column", minHeight: isMobile ? "auto" : "100%" }}>
         {/* Ticker header */}
         <div style={{
-          padding: isMobile ? "10px 12px" : "12px 20px", borderBottom: `1px solid ${COLORS.border}`,
-          display: "flex", alignItems: "center", gap: isMobile ? 8 : 16, flexShrink: 0,
+          padding: isMobile ? "6px 10px" : "12px 20px", borderBottom: `1px solid ${COLORS.border}`,
+          display: "flex", alignItems: "center", gap: isMobile ? 6 : 16, flexShrink: 0,
           background: COLORS.surface, flexWrap: "wrap"
         }}>
           {/* Ticker + prev/next nav */}
@@ -3913,7 +3921,7 @@ export default function App() {
           {/* ── Cup & Handle view: Recharts ── */}
           {chartSubTab === "pattern" && (
             <div key={`pattern-${selectedTicker}`} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div style={{ height: isMobile ? 320 : 360 }}>
+              <div style={{ height: isMobile ? "45vh" : "52vh", minHeight: isMobile ? 280 : 340 }}>
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 8, right: 16, bottom: 0, left: 8 }}>
                     <CartesianGrid stroke={COLORS.border} strokeDasharray="2 4" vertical={false} />
@@ -4560,7 +4568,11 @@ export default function App() {
     const noDet = selectedTicker && !selectedDetection;
     const sectorPulse = hmData.find(d => d.ticker === selectedTicker)?.total ?? null;
     const tickerRows = (selectedTicker && rawData) ? (rawData.get(selectedTicker) || []) : [];
-    const patternBarsFromEnd = selectedDetection ? (tickerRows.length - 1 - selectedDetection.rightRim) : null;
+    const patternBarsFromEnd = selectedDetection
+      ? (tickerRows.length - 1 - (selectedDetection.setupType === "rhs"
+          ? (selectedDetection.rightShoulderIdx ?? selectedDetection.rightRim ?? 0)
+          : (selectedDetection.rightRim ?? 0)))
+      : null;
     const recencyMult = computeRecencyMultiplier(patternBarsFromEnd, tickerRows.length);
     const domainNodes = (!noTicker && !noDet) ? buildDomainNodes(selectedDetection, sectorPulse, recencyMult) : [];
     const { cohesionScore } = domainNodes.length ? analyzeDomainGraph(domainNodes) : { cohesionScore: {} };
@@ -4717,12 +4729,21 @@ export default function App() {
           box-sizing: border-box;
         }
         html, body {
-          height: 100%; margin: 0; overflow: hidden;
-          width: 100%; overscroll-behavior: none;
+          height: 100%; margin: 0;
+          width: 100%;
+          /* Allow native scroll on mobile; desktop stays locked */
+          overflow: ${isMobile ? "auto" : "hidden"};
+          overscroll-behavior: ${isMobile ? "auto" : "none"};
         }
-        #root, #__next { height: 100%; overflow: hidden; }
-        .cupscan-app-root { height: 100vh; overflow: hidden; }
-        @supports (height: 100dvh) { .cupscan-app-root { height: 100dvh; } }
+        #root, #__next { height: 100%; overflow: ${isMobile ? "auto" : "hidden"}; }
+        .cupscan-app-root {
+          min-height: ${isMobile ? "100dvh" : "100vh"};
+          height: ${isMobile ? "auto" : "100vh"};
+          overflow: ${isMobile ? "visible" : "hidden"};
+        }
+        @supports (height: 100dvh) {
+          .cupscan-app-root { min-height: 100dvh; }
+        }
       `}</style>
       {/* Header */}
       <div style={S.header}>
