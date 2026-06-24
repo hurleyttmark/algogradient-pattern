@@ -1055,18 +1055,21 @@ function detectReverseHS(ohlcv, tol) {
 
 
 // ═══════════════════════════════════════════════════════════════
-// HEAD & SHOULDERS (classic bearish) DETECTOR — v2
+// HEAD & SHOULDERS (classic bearish) DETECTOR — v3
 // ───────────────────────────────────────────────────────────────
-// Structure: left shoulder peak → inner trough → HEAD peak (highest)
-// → inner trough → right shoulder peak → neckline breakdown.
+// From the diagram: Left shoulder (A) → trough B → Head (C, highest peak)
+// → trough D → Right shoulder (E) → brief bounce to G (neckline retest)
+// → BREAKDOWN below neckline on rising volume.
 //
-// Textbook spec:
-//  • Head is the highest peak; both shoulders lower than head
-//  • Shoulders roughly symmetric in height ABOVE the neckline (not raw price)
-//  • Neckline drawn through the two inner troughs; breakdown = close below it
-//  • Volume: highest at left shoulder, declining through head, lightest at
-//    right shoulder — breakdown occurs on a volume surge
-//  • Head shape: sharp reversal (Λ); shoulders: rounded tops (∩)
+// KEY INSIGHT from diagram simulation:
+//  • Right shoulder is typically LOWER than left shoulder in raw price —
+//    the market is in a downtrend by then. Do NOT gate on raw price symmetry.
+//  • Symmetry "above the neckline" also fails because left shoulder sits
+//    much higher above the neckline than the right (which forms near it).
+//  • The real requirement: both shoulders below the head, both above the neckline.
+//    Symmetry is a soft scoring bonus only.
+//  • Volume: highest at left shoulder, declining through head, 
+//    RISING on the breakdown (not at right shoulder).
 // ═══════════════════════════════════════════════════════════════
 function detectHeadAndShoulders(ohlcv, tol) {
   const n = ohlcv.length;
@@ -1083,150 +1086,149 @@ function detectHeadAndShoulders(ohlcv, tol) {
   const avgVolAll = volumes.reduce((a, b) => a + b, 0) / n;
 
   const IDEAL_TOTAL = 189;
-  const MIN_TOTAL   = 60;   // looser floor — some H&S form faster
-  const MAX_TOTAL   = 320;
+  const MIN_TOTAL   = 50;
+  const MAX_TOTAL   = 350;
 
   let best = null;
   let bestScore = -1;
 
-  // Seed from the highest peaks first (head must be the dominant high)
+  // Seed from the highest peaks first — head is the dominant high
   const sortedMaxima = [...maxima].sort((a, b) => smooth[b] - smooth[a]);
 
   for (const head of sortedMaxima) {
     const headPrice = smooth[head];
 
-    // Left shoulder: local max LEFT of head, lower than head
+    // Left shoulder: local max LEFT of head, strictly lower than head
     const leftShCandidates = maxima.filter(m => m < head - 10 && smooth[m] < headPrice);
-    // Right shoulder: local max RIGHT of head, lower than head, not at the very end
+    // Right shoulder: local max RIGHT of head, strictly lower than head
     const rightShCandidates = maxima.filter(m => m > head + 10 && smooth[m] < headPrice && m < n - 5);
     if (!leftShCandidates.length || !rightShCandidates.length) continue;
 
-    // Take up to 4 nearest-to-head candidates on each side (avoids distant noise)
-    const nearLeft  = [...leftShCandidates].sort((a, b) => b - a).slice(0, 4); // closest left first
-    const nearRight = [...rightShCandidates].sort((a, b) => a - b).slice(0, 4); // closest right first
+    // Nearest candidates on each side
+    const nearLeft  = [...leftShCandidates].sort((a, b) => b - a).slice(0, 4);
+    const nearRight = [...rightShCandidates].sort((a, b) => a - b).slice(0, 4);
 
     for (const leftSh of nearLeft) {
       const leftShPrice = smooth[leftSh];
 
-      // Left trough: deepest min between left shoulder and head
+      // Left trough B: deepest min between left shoulder and head
       const ltCands = minima.filter(m => m > leftSh && m < head);
       if (!ltCands.length) continue;
       const leftTrough = ltCands.reduce((a, b) => smooth[a] < smooth[b] ? a : b);
       const leftTroughPrice = smooth[leftTrough];
 
-      // Left trough must actually be below both the left shoulder and head
-      if (leftTroughPrice >= leftShPrice || leftTroughPrice >= headPrice) continue;
+      // Left trough must be below the shoulder
+      if (leftTroughPrice >= leftShPrice) continue;
 
       for (const rightSh of nearRight) {
         const rightShPrice = smooth[rightSh];
 
-        // Right trough: deepest min between head and right shoulder
+        // Right trough D: deepest min between head and right shoulder
         const rtCands = minima.filter(m => m > head && m < rightSh);
         if (!rtCands.length) continue;
         const rightTrough = rtCands.reduce((a, b) => smooth[a] < smooth[b] ? a : b);
         const rightTroughPrice = smooth[rightTrough];
 
-        // Right trough must be below both the head and right shoulder
-        if (rightTroughPrice >= rightShPrice || rightTroughPrice >= headPrice) continue;
-
-        // ── Neckline: line through the two inner troughs ──────────────────
-        const necklineSlope = (rightTroughPrice - leftTroughPrice) / (rightTrough - leftTrough);
-        const necklineAt = (idx) => leftTroughPrice + necklineSlope * (idx - leftTrough);
-
-        // Both shoulders MUST be above the neckline at their location
-        const neckAtLeftSh  = necklineAt(leftSh);
-        const neckAtRightSh = necklineAt(rightSh);
-        const neckAtHead    = necklineAt(head);
-        if (leftShPrice  <= neckAtLeftSh)  continue;
-        if (rightShPrice <= neckAtRightSh) continue;
-        if (headPrice    <= neckAtHead)    continue;
-
-        // ── Neckline tilt: loosened to 25% ───────────────────────────────
-        const troughAvg     = (leftTroughPrice + rightTroughPrice) / 2;
-        const necklineTilt  = Math.abs(rightTroughPrice - leftTroughPrice) / (troughAvg || 1);
-        if (necklineTilt > 0.25) continue;
-        const necklineScore = Math.max(0, 1 - necklineTilt / 0.25);
-
-        // ── Head height above neckline ─────────────────────────────────────
-        const headHeight    = headPrice - neckAtHead;
-        if (headHeight <= 0) continue;
-
-        // ── Shoulder symmetry ABOVE the neckline (your spec) ─────────────
-        // Each shoulder's height = shoulder_price - neckline_at_shoulder
-        const leftShAbove  = leftShPrice  - neckAtLeftSh;
-        const rightShAbove = rightShPrice - neckAtRightSh;
-        if (leftShAbove <= 0 || rightShAbove <= 0) continue;
-
-        const shAboveAvg = (leftShAbove + rightShAbove) / 2;
-        const shoulderSym = 1 - Math.abs(leftShAbove - rightShAbove) / shAboveAvg;
-        if (shoulderSym < 0.65) continue;   // symmetric above neckline, not in raw price
-
-        // Head must be clearly higher than both shoulders above the neckline
-        const headDepth = headHeight / shAboveAvg; // ratio: head height vs shoulder height
-        // headDepth < 1 means head isn't even as tall as shoulders (not H&S)
-        if (headDepth < 1.1) continue;
-        // Score peaks at ~1.5–2.5x (head clearly dominant but not absurd)
-        const headDepthScore = headDepth <= 2.5
-          ? Math.min(1, (headDepth - 1.1) / 1.4)
-          : Math.max(0, 1 - (headDepth - 2.5) / 2.0);
+        // Right trough must be below the shoulder
+        if (rightTroughPrice >= rightShPrice) continue;
 
         // ── Duration ──────────────────────────────────────────────────────
         const totalLen = rightSh - leftSh;
         if (totalLen < MIN_TOTAL || totalLen > MAX_TOTAL) continue;
-        const durationScore = Math.max(0, Math.exp(-Math.pow((totalLen - IDEAL_TOTAL) / (IDEAL_TOTAL * 0.55), 2)));
-
-        // ── Width symmetry ────────────────────────────────────────────────
         const leftWidth  = head - leftSh;
         const rightWidth = rightSh - head;
-        const widthSym = 1 - Math.abs(leftWidth - rightWidth) / (leftWidth + rightWidth);
-        if (widthSym < 0.30) continue;  // looser — real H&S can be asymmetric in time
 
-        // ── Volume profile (corrected) ────────────────────────────────────
-        // Textbook: Left shoulder highest volume → declining through head →
-        // right shoulder lowest → breakdown on surge.
+        // ── Neckline: line through troughs B and D ────────────────────────
+        const necklineSlope = (rightTroughPrice - leftTroughPrice) / (rightTrough - leftTrough);
+        const necklineAt = (idx) => leftTroughPrice + necklineSlope * (idx - leftTrough);
+
+        const neckAtLeftSh  = necklineAt(leftSh);
+        const neckAtRightSh = necklineAt(rightSh);
+        const neckAtHead    = necklineAt(head);
+
+        // Both shoulders and head must be ABOVE the neckline at their location
+        if (leftShPrice  <= neckAtLeftSh)  continue;
+        if (rightShPrice <= neckAtRightSh) continue;
+        if (headPrice    <= neckAtHead)    continue;
+
+        // ── Neckline tilt ─────────────────────────────────────────────────
+        const troughAvg    = (leftTroughPrice + rightTroughPrice) / 2;
+        const necklineTilt = Math.abs(rightTroughPrice - leftTroughPrice) / (troughAvg || 1);
+        if (necklineTilt > 0.30) continue;
+        const necklineScore = Math.max(0, 1 - necklineTilt / 0.30);
+
+        // ── Head dominance: head must be higher than BOTH shoulders ───────
+        const headAboveNeck = headPrice - neckAtHead;
+        if (headAboveNeck <= 0) continue;
+
+        // Both shoulders must be lower than head (already guaranteed by candidate filter)
+        // Head should be at least 5% above the higher shoulder
+        const higherShoulder = Math.max(leftShPrice, rightShPrice);
+        if (headPrice < higherShoulder * 1.03) continue;  // head barely taller = not H&S
+
+        // ── Shoulder height fractions above neckline ──────────────────────
+        const leftShAbove  = leftShPrice  - neckAtLeftSh;
+        const rightShAbove = rightShPrice - neckAtRightSh;
+        // Both must be meaningfully above the neckline
+        if (leftShAbove  <= 0 || rightShAbove <= 0) continue;
+
+        // Head dominance score: head height above neckline vs average shoulder
+        const shAboveAvg   = (leftShAbove + rightShAbove) / 2;
+        const headDomRatio = headAboveNeck / shAboveAvg;
+        if (headDomRatio < 1.1) continue;
+        const headDepthScore = headDomRatio <= 3.0
+          ? Math.min(1, (headDomRatio - 1.1) / 1.9)
+          : Math.max(0, 1 - (headDomRatio - 3.0) / 2.0);
+
+        // ── Shoulder symmetry: SOFT score only, no hard gate ─────────────
+        // Real H&S right shoulder is often 20-40% lower than left — that's normal.
+        // Score how similar they are above the neckline; penalise wildly different ones.
+        const shSymRatio = Math.min(leftShAbove, rightShAbove) / Math.max(leftShAbove, rightShAbove);
+        const shoulderSym = shSymRatio; // 0=completely different, 1=identical
+
+        // ── Width symmetry (soft) ─────────────────────────────────────────
+        const widthSym = 1 - Math.abs(leftWidth - rightWidth) / (leftWidth + rightWidth);
+
+        // ── Duration score ─────────────────────────────────────────────────
+        const durationScore = Math.max(0, Math.exp(-Math.pow((totalLen - IDEAL_TOTAL) / (IDEAL_TOTAL * 0.6), 2)));
+
+        // ── Volume profile ────────────────────────────────────────────────
+        // Textbook (from diagram): highest at left shoulder → declines through head
+        // → right shoulder lighter → RISING VOLUME on breakdown below neckline.
         const volAround = (idx, half) => {
           let s = 0, c = 0;
           for (let i = Math.max(0, idx - half); i <= Math.min(n - 1, idx + half); i++) { s += volumes[i]; c++; }
           return c ? s / c : avgVolAll;
         };
-        const vLeftSh  = volAround(leftSh,  8);
-        const vHead    = volAround(head,    8);
+        const vLeftSh  = volAround(leftSh, 8);
+        const vHead    = volAround(head,   8);
         const vRightSh = volAround(rightSh, 8);
         let volScore = 0;
-        if (vLeftSh > vHead)    volScore += 0.40;   // vol declines from left shoulder to head
-        if (vRightSh < vHead)   volScore += 0.35;   // right shoulder even lighter than head
-        if (vRightSh < vLeftSh) volScore += 0.25;   // progressive decline left→right (strongest signal)
+        if (vLeftSh > vHead)    volScore += 0.40;  // declining into head
+        if (vRightSh < vHead)   volScore += 0.35;  // right shoulder lighter
+        if (vRightSh < vLeftSh) volScore += 0.25;  // progressive decline
 
-        // ── Breakdown proximity ───────────────────────────────────────────
-        // Look ahead past the right shoulder for a neckline break.
-        // Use the neckline itself as the trigger (not the support minimum).
-        const lookAheadBars = Math.max(10, Math.round(rightWidth * 0.6));
+        // ── Breakdown bar: look ahead past right shoulder ─────────────────
+        // In the diagram, after E price touches G (neckline retest) then breaks.
+        // We look ahead ~60% of rightWidth bars.
+        const lookAheadBars = Math.max(15, Math.round(rightWidth * 0.7));
         const breakdownBar  = Math.min(n - 1, rightSh + lookAheadBars);
         const necklineAtBreak = necklineAt(breakdownBar);
         const refClose = closes[breakdownBar];
         const breakdownCleared = refClose < necklineAtBreak;
 
-        // Distance: how far price is above the neckline, normalised by head height
-        const distToNeck = (refClose - necklineAtBreak) / headHeight;
-        // distToNeck ≤ 0 → already broken through → 1.0
-        // distToNeck = 0.5 → halfway → 0.5
-        // distToNeck ≥ 1.0 → far away → 0
+        // Proximity: how close is price to the neckline?
+        // Use % of headAboveNeck as normaliser so tight patterns score well too
+        const distToNeck = (refClose - necklineAtBreak) / headAboveNeck;
         const breakoutProx = breakdownCleared
           ? 1.0
-          : Math.max(0, 1 - Math.max(0, distToNeck) / 1.0);
+          : Math.max(0, 1 - Math.max(0, distToNeck) / 1.5);
 
-        // Breakdown volume surge
-        const breakVol = (volumes[breakdownBar] + (volumes[breakdownBar - 1] || 0) + (volumes[breakdownBar - 2] || 0)) / 3;
+        // Breakdown volume surge (rising volume = confirmation from diagram)
+        const breakVol = (volumes[breakdownBar] + (volumes[Math.max(0,breakdownBar-1)] || 0) + (volumes[Math.max(0,breakdownBar-2)] || 0)) / 3;
         const volSurge = Math.max(0, Math.min(1, (breakVol / avgVolAll - 1) / 0.5));
 
-        // ── Shallowness: shoulders should not exceed ~70% of head height above neckline ──
-        const leftShFrac  = leftShAbove  / headHeight;
-        const rightShFrac = rightShAbove / headHeight;
-        const avgShFrac   = (leftShFrac + rightShFrac) / 2;
-        // Ideal shoulder fraction: 0.3–0.7 of head height. Below 0.2 = barely there; above 0.8 = barely a head.
-        const shallowScore = Math.max(0, 1 - Math.abs(avgShFrac - 0.5) / 0.5);
-
-        // ── Area fit: how closely smooth price tracks the ∩-Λ-∩ ideal ────
+        // ── Area fit ──────────────────────────────────────────────────────
         const anchors = [
           { idx: leftSh,      y: leftShPrice },
           { idx: leftTrough,  y: leftTroughPrice },
@@ -1255,20 +1257,29 @@ function detectHeadAndShoulders(ohlcv, tol) {
           areaFitDev += Math.abs(px - g.ghostShape);
           areaFitCount++;
         }
-        const areaFit = areaFitCount ? Math.max(0, 1 - (areaFitDev / areaFitCount) / (headHeight * 0.5)) : 0;
+        const areaFit = areaFitCount ? Math.max(0, 1 - (areaFitDev / areaFitCount) / (headAboveNeck * 0.6)) : 0;
+
+        // ── Shoulder shallowness: both shoulders should be between 20-80% of head height ──
+        const leftFrac  = leftShAbove  / headAboveNeck;
+        const rightFrac = rightShAbove / headAboveNeck;
+        // Score: penalty if shoulders are too tall (nearly as high as head = not H&S)
+        // or too short (barely above neckline = noise)
+        const leftShallow  = Math.max(0, 1 - Math.max(0, leftFrac  - 0.75) / 0.25) * Math.min(1, leftFrac  / 0.15);
+        const rightShallow = Math.max(0, 1 - Math.max(0, rightFrac - 0.75) / 0.25) * Math.min(1, rightFrac / 0.15);
+        const shallowScore = (leftShallow + rightShallow) / 2;
 
         // ── Composite ─────────────────────────────────────────────────────
         const composite =
-          headDepthScore * 0.16 +
-          shoulderSym    * 0.22 +   // neckline-relative symmetry (your spec)
-          areaFit        * 0.10 +
-          widthSym       * 0.07 +
-          necklineScore  * 0.15 +
-          shallowScore   * 0.07 +
+          headDepthScore * 0.20 +   // head dominance is primary
+          shoulderSym    * 0.10 +   // soft — real patterns have asymmetric shoulders
+          areaFit        * 0.12 +
+          widthSym       * 0.08 +
+          necklineScore  * 0.14 +
+          shallowScore   * 0.08 +
           durationScore  * 0.04 +
-          volScore       * 0.12 +   // elevated — volume is the primary H&S tell
-          breakoutProx   * 0.06 +
-          volSurge       * 0.01;
+          volScore       * 0.14 +   // volume profile is primary tell
+          breakoutProx   * 0.08 +
+          volSurge       * 0.02;
 
         if (composite > bestScore) {
           bestScore = composite;
@@ -1285,12 +1296,12 @@ function detectHeadAndShoulders(ohlcv, tol) {
             leftPeakIdx: leftTrough, rightPeakIdx: rightTrough,
             leftShPrice, rightShPrice, headPrice,
             leftPeakPrice: leftTroughPrice, rightPeakPrice: rightTroughPrice,
-            headDepth: headDepth / 3, // normalise to 0–1 range for display
+            headDepth: Math.min(1, (headPrice - higherShoulder) / headPrice),
             shoulderSym, widthSym, necklineScore, shallowScore,
-            shapeScore: shallowScore, // reuse slot
+            shapeScore: shallowScore,
             durationScore, totalLen, necklineSlope, breakdownBar,
             areaFit, volSurge, breakoutCleared,
-            leftShAbove, rightShAbove, headHeight,
+            leftShAbove, rightShAbove, headAboveNeck,
             necklineLeftIdx:   leftTrough,
             necklineLeftPrice: leftTroughPrice,
             necklineRightIdx:  rightTrough,
