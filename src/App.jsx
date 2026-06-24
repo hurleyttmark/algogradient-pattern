@@ -2748,7 +2748,7 @@ export default function App() {
         { key: "depthScore",   label: "Head Depth",   direct: null },
         { key: "handleQuality",label: "U/V Shape",    direct: "shapeScore" },
         { key: "breakoutProx", label: "Brk Prox",     direct: "breakoutProx" },
-        { key: "volumeConf",   label: "Volume",       direct: "volScore" },
+        { key: "volumeConf",   label: "Volume",       direct: "volConf" },
         { key: "gradConf",     label: "Brk Vol",      direct: "volSurge" },
         { key: "recentMomentum", label: "Momentum",   direct: "recentMomentum" },
         { key: "necklineScore",  label: "Neckline",   direct: "necklineScore" },
@@ -3034,11 +3034,10 @@ export default function App() {
   const S = {
     app: {
       background: COLORS.bg, color: COLORS.text,
-      height: isMobile ? "auto" : "100%",
-      minHeight: isMobile ? "100dvh" : undefined,
+      height: "100%",
       fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
       display: "flex", flexDirection: "column", fontSize: 14,
-      overflow: isMobile ? "visible" : "hidden",
+      overflow: "hidden",
       width: "100%", maxWidth: "100vw",
       boxSizing: "border-box",
     },
@@ -3049,14 +3048,14 @@ export default function App() {
     },
     logo: { fontSize: 17, fontWeight: 800, color: COLORS.accent, letterSpacing: "-0.5px", whiteSpace: "nowrap" },
     logoSub: { fontSize: 11, color: COLORS.textMuted, marginLeft: 8 },
-    main: { display: "flex", flex: 1, minHeight: isMobile ? "auto" : 0, overflow: isMobile ? "visible" : "hidden", flexDirection: isMobile ? "column" : "row" },
+    main: { display: "flex", flex: 1, minHeight: 0, overflow: "hidden", flexDirection: isMobile ? "column" : "row" },
     sidebar: isMobile ? { display: "none" } : {
       width: 272, flexShrink: 0, background: COLORS.surface,
       borderRight: `1px solid ${COLORS.border}`,
       display: "flex", flexDirection: "column", overflow: "hidden"
     },
     sidebarScroll: { flex: 1, overflowY: "auto", padding: 14 },
-    content: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden" },
+    content: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" },
     tabBar: {
       display: isMobile ? "none" : "flex", borderBottom: `1px solid ${COLORS.border}`,
       background: COLORS.surface, flexShrink: 0, padding: "0 4px"
@@ -3068,7 +3067,7 @@ export default function App() {
       cursor: "pointer", background: "none", border: "none",
       outline: "none", transition: "color 0.15s", whiteSpace: "nowrap"
     }),
-    panel: { flex: 1, overflowY: isMobile ? "visible" : "auto", overflowX: "hidden", minHeight: isMobile ? "auto" : 0, minWidth: 0, paddingBottom: isMobile ? 80 : 0, overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" },
+    panel: { flex: 1, overflowY: "auto", overflowX: "hidden", minHeight: 0, minWidth: 0, paddingBottom: isMobile ? 80 : 0, overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" },
     card: {
       background: COLORS.surfaceHover, border: `1px solid ${COLORS.border}`,
       borderRadius: 10, padding: 14, marginBottom: 10
@@ -4725,24 +4724,17 @@ export default function App() {
   return (
     <div style={S.app} className="cupscan-app-root">
       <style>{`
-        *, *::before, *::after {
-          box-sizing: border-box;
-        }
+        *, *::before, *::after { box-sizing: border-box; }
         html, body {
-          height: 100%; margin: 0;
-          width: 100%;
-          /* Allow native scroll on mobile; desktop stays locked */
-          overflow: ${isMobile ? "auto" : "hidden"};
-          overscroll-behavior: ${isMobile ? "auto" : "none"};
+          height: 100%; margin: 0; overflow: hidden;
+          width: 100%; overscroll-behavior: none;
         }
-        #root, #__next { height: 100%; overflow: ${isMobile ? "auto" : "hidden"}; }
-        .cupscan-app-root {
-          min-height: ${isMobile ? "100dvh" : "100vh"};
-          height: ${isMobile ? "auto" : "100vh"};
-          overflow: ${isMobile ? "visible" : "hidden"};
-        }
-        @supports (height: 100dvh) {
-          .cupscan-app-root { min-height: 100dvh; }
+        #root, #__next { height: 100%; overflow: hidden; }
+        .cupscan-app-root { height: 100vh; overflow: hidden; }
+        @supports (height: 100dvh) { .cupscan-app-root { height: 100dvh; } }
+        /* Mobile: make the panel div scrollable instead of the document */
+        @media (max-width: 768px) {
+          .pp-panel { overflow-y: auto !important; -webkit-overflow-scrolling: touch !important; }
         }
       `}</style>
       {/* Header */}
@@ -4811,7 +4803,7 @@ export default function App() {
             ))}
           </div>
 
-          <div style={S.panel}>
+          <div style={S.panel} className="pp-panel">
             {activeTab === "leaderboard" && renderLeaderboard()}
             {activeTab === "chart" && renderChart()}
             {activeTab === "heatmap" && renderHeatmap()}
