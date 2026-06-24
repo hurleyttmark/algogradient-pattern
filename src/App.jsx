@@ -3155,7 +3155,8 @@ export default function App() {
     const spanStrength = streaks.map(sk => Math.max(-3, Math.min(3, sk)));
 
     // Gradient score per bar: O(n) rolling 20-bar window
-    // BUG #8 FIX continued: single-pass using running bull/bear counters
+    // Trailing window: score at bar i reflects exactly the 20 bars ending at i.
+    // Bars before a full window is available are left at 0 (no false early signal).
     const GRAD_WIN = 20;
     const gradientScores = new Array(rows.length).fill(0);
     {
@@ -3167,7 +3168,10 @@ export default function App() {
           const old = candleSignals[i - GRAD_WIN];
           if (old > 0) bull--; else if (old < 0) bear--;
         }
-        gradientScores[i] = Math.max(-1, Math.min(1, (bull - bear) / (GRAD_WIN * 0.5)));
+        // Only score once a full 20-bar window is available
+        if (i >= GRAD_WIN - 1) {
+          gradientScores[i] = Math.max(-1, Math.min(1, (bull - bear) / (GRAD_WIN * 0.5)));
+        }
       }
     }
 
@@ -4007,7 +4011,7 @@ export default function App() {
             <div style={{
               padding: "10px 16px", borderBottom: `1px solid ${COLORS.border}`,
               display: "flex", gap: 6, alignItems: "center", flexShrink: 0, background: COLORS.bg,
-              flexWrap: "nowrap", overflowX: "auto", WebkitOverflowScrolling: "touch",
+              flexWrap: "wrap",
             }}>
               {/* Bullish group */}
               <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap" }}>
