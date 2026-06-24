@@ -864,13 +864,26 @@ function detectReverseHS(ohlcv, tol) {
 
         const shoulderAvg = (leftShPrice + rightShPrice) / 2;
 
-        // ── Head depth below shoulders ── (ideal 10–30%, max ~50%)
+        // ── Head depth below shoulders ── (ideal 12–35%, max ~50%)
+        // Raised minimum: head must be meaningfully lower than shoulders,
+        // not just marginally so. 8% is barely distinguishable from noise.
         const headDepth = (shoulderAvg - headPrice) / shoulderAvg;
-        if (headDepth < 0.05 || headDepth > 0.50) continue;
+        if (headDepth < 0.08 || headDepth > 0.50) continue;  // raised floor 0.05→0.08
         let headDepthScore;
-        if (headDepth >= 0.10 && headDepth <= 0.30) headDepthScore = 1.0;
-        else if (headDepth < 0.10) headDepthScore = headDepth / 0.10;          // shallow
-        else headDepthScore = Math.max(0, 1 - (headDepth - 0.30) / 0.20);      // too deep
+        if (headDepth >= 0.12 && headDepth <= 0.35) headDepthScore = 1.0;  // ideal range
+        else if (headDepth < 0.12) headDepthScore = headDepth / 0.12;      // too shallow
+        else headDepthScore = Math.max(0, 1 - (headDepth - 0.35) / 0.15); // too deep
+
+        // ── Head must also be sufficiently below the neckline ──
+        // The neckline is defined by the two inner peaks. The head low must
+        // sit meaningfully below the neckline — not just slightly under it.
+        // This prevents "flat" patterns where the head barely dips below peaks.
+        const necklineAtHead = leftPeakPrice + ((rightPeakPrice - leftPeakPrice) / (rightPeak - leftPeak)) * (head - leftPeak);
+        const headBelowNeckline = (necklineAtHead - headPrice) / necklineAtHead;
+        // Hard gate: head must be at least 8% below neckline
+        if (headBelowNeckline < 0.08) continue;
+        // Score bonus: deeper below neckline = stronger pattern
+        const headNecklineScore = Math.min(1, headBelowNeckline / 0.20); // 20%+ = full score
 
         // ── Total duration ──
         const totalLen = rightSh - leftSh;
@@ -879,19 +892,16 @@ function detectReverseHS(ohlcv, tol) {
 
         // ── Shoulder symmetry (price) ──
         // Hard gate: shoulders must be within 10% of each other in price.
-        // Anything looser is not a textbook reverse H&S — eliminate early.
         const shoulderSym = 1 - Math.abs(leftShPrice - rightShPrice) / shoulderAvg;
-        if (shoulderSym < 0.90) continue;  // tightened from 0.80 → 0.90
+        if (shoulderSym < 0.90) continue;
 
         // ── Neckline through the two inner peaks ──
-        // Hard gate: the two inner peaks (neckline anchors) must also be
-        // within 10% of each other — a strongly tilted neckline means the
-        // pattern is asymmetric at the resistance level, not just the lows.
+        // Tightened: max 7% peak divergence (was 10%).
+        // A near-horizontal neckline is a textbook requirement.
         const peakAvg = (leftPeakPrice + rightPeakPrice) / 2;
         const necklineTilt = Math.abs(rightPeakPrice - leftPeakPrice) / peakAvg;
-        if (necklineTilt > 0.10) continue; // hard gate: >10% peak divergence eliminated
-        // Score: 0% tilt → 1.0, 10% tilt → 0 (steeper decay than before)
-        const necklineScore = Math.max(0, 1 - necklineTilt / 0.10);
+        if (necklineTilt > 0.07) continue; // tightened: >7% eliminated (was 10%)
+        const necklineScore = Math.max(0, 1 - necklineTilt / 0.07); // steeper decay
 
         const necklineSlope = (rightPeakPrice - leftPeakPrice) / (rightPeak - leftPeak);
         const necklineAt = (idx) => leftPeakPrice + necklineSlope * (idx - leftPeak);
@@ -900,32 +910,40 @@ function detectReverseHS(ohlcv, tol) {
         const leftWidth  = head - leftSh;
         const rightWidth = rightSh - head;
         const widthSym = 1 - Math.abs(leftWidth - rightWidth) / (leftWidth + rightWidth);
-        // Hard gate: width ratio must be at least 40:60 — wildly lopsided patterns out
         if (widthSym < 0.40) continue;
 
         // ── Shoulders shallow vs head & shouldn't sink far below neckline ──
-        // Shoulder low relative to head depth (shallower = better).
         const leftShoulderDepth  = (necklineAt(leftSh)  - leftShPrice)  / (necklineAt(leftSh)  - headPrice);
         const rightShoulderDepth = (necklineAt(rightSh) - rightShPrice) / (necklineAt(rightSh) - headPrice);
-        // Ideal shoulders are clearly shallower than the head (depth fraction < ~0.7)
         const shallowScore = Math.max(0, Math.min(1,
           1 - ((leftShoulderDepth + rightShoulderDepth) / 2 - 0.4) / 0.5
         ));
 
-        // ── Shape: shoulders rounded (U), head sharp (V) ──
-        // U-ness: a rounded low has its minimum spread across several bars
-        // (neighbors close to the low). V-ness: sharp single-bar capitulation.
+        // ── Shape: shoulders must be defined (not flat), head must be sharp ──
+        // Shoulders: a well-defined low has clear descent and recovery.
+        // Too flat (roundedness near 1) = no real shoulder structure.
+        // Hard gate: shoulders must show at least some definition.
         const roundedness = (idx, half) => {
           let s = 0, c = 0;
           for (let i = Math.max(0, idx - half); i <= Math.min(n - 1, idx + half); i++) { s += smooth[i]; c++; }
           const mean = s / c;
-          // closer mean to the low → flatter/rounder base
           return 1 - Math.min(1, Math.abs(mean - smooth[idx]) / (smooth[idx] || 1) / 0.04);
         };
         const leftRound  = roundedness(leftSh, 8);
         const rightRound = roundedness(rightSh, 8);
         const headSharp  = 1 - roundedness(head, 5); // inverse → V-ness
-        const shapeScore = Math.max(0, Math.min(1, (leftRound + rightRound) / 2 * 0.6 + headSharp * 0.4));
+
+        // Shoulder definition: reward clear lows (roundedness < 0.85),
+        // penalize overly flat shoulders (roundedness > 0.92).
+        // An overly flat shoulder isn't a real shoulder — it's just a flat region.
+        const leftShDefined  = leftRound  < 0.92 ? 1.0 : Math.max(0, 1 - (leftRound  - 0.92) / 0.08);
+        const rightShDefined = rightRound < 0.92 ? 1.0 : Math.max(0, 1 - (rightRound - 0.92) / 0.08);
+        // Hard gate: both shoulders must show some definition
+        if (leftShDefined < 0.3 || rightShDefined < 0.3) continue;
+
+        const shapeScore = Math.max(0, Math.min(1,
+          (leftShDefined + rightShDefined) / 2 * 0.5 + headSharp * 0.5
+        ));
 
         // ── Volume profile ──
         // Highest at left shoulder, declines into head (lowest near bottom),
@@ -970,22 +988,24 @@ function detectReverseHS(ohlcv, tol) {
         const areaFit = computeRHSAreaFit(smooth, ghostPts, headHeightForFit);
 
         // ── Composite ──
-        // shoulderSym and necklineScore now carry the most weight — they are
-        // the primary shape quality dimensions after the hard gates above.
-        // Patterns that squeezed through with 90% shoulder sym still get
-        // heavily penalised in score vs textbook-perfect ones.
+        // Three primary quality gates now scored:
+        //   headDepthScore    — head meaningfully lower than shoulders
+        //   headNecklineScore — head meaningfully below the neckline
+        //   necklineScore     — neckline near-horizontal
+        // Together these enforce the core textbook H&S requirements.
         const composite =
-          headDepthScore * 0.14 +
-          shoulderSym    * 0.20 +   // increased: primary shape quality gate
-          areaFit        * 0.12 +
-          widthSym       * 0.08 +
-          necklineScore  * 0.18 +   // increased: peak alignment is critical
-          shallowScore   * 0.06 +
-          shapeScore     * 0.07 +
-          durationScore  * 0.05 +
-          volScore       * 0.06 +
-          breakoutProx   * 0.03 +
-          volSurge       * 0.01;
+          headDepthScore    * 0.12 +
+          headNecklineScore * 0.10 +  // new: head must be well below neckline
+          shoulderSym       * 0.18 +
+          areaFit           * 0.11 +
+          widthSym          * 0.07 +
+          necklineScore     * 0.18 +  // near-horizontal neckline critical
+          shallowScore      * 0.06 +
+          shapeScore        * 0.08 +  // shoulder definition + head sharpness
+          durationScore     * 0.04 +
+          volScore          * 0.05 +
+          breakoutProx      * 0.01 +
+          volSurge          * 0.00;
 
         if (composite > bestScore) {
           bestScore = composite;
