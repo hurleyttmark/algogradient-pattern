@@ -1054,6 +1054,467 @@ function detectReverseHS(ohlcv, tol) {
 }
 
 
+// ═══════════════════════════════════════════════════════════════
+// HEAD & SHOULDERS (classic bearish) DETECTOR
+// ───────────────────────────────────────────────────────────────
+// Structure: left shoulder (local high) → inner trough → HEAD (highest peak)
+// → inner trough → right shoulder (local high, ~symmetric) → breakdown below neckline.
+// Mirror of detectReverseHS: min↔max, high↔low, breakout = break below neckline.
+// ═══════════════════════════════════════════════════════════════
+function detectHeadAndShoulders(ohlcv, tol) {
+  const n = ohlcv.length;
+  if (n < 80) return null;
+
+  const closes  = ohlcv.map(r => r.close);
+  const volumes = ohlcv.map(r => r.volume);
+  const smooth  = wmaSmooth(closes, tol.smoothing);
+
+  const minima = findLocalMinima(smooth);
+  const maxima = findLocalMaxima(smooth);
+  if (maxima.length < 3 || minima.length < 2) return null;
+
+  const avgVolAll = volumes.reduce((a, b) => a + b, 0) / n;
+
+  const IDEAL_TOTAL = 189;
+  const MIN_TOTAL   = 80;
+  const MAX_TOTAL   = 320;
+
+  let best = null;
+  let bestScore = -1;
+
+  // Iterate over head candidates = the highest peaks
+  for (const head of maxima) {
+    const headPrice = smooth[head];
+
+    // Left shoulder: a local max to the LEFT of the head, lower than head
+    const leftShCandidates = maxima.filter(m => m < head - 15 && smooth[m] < headPrice);
+    // Right shoulder: a local max to the RIGHT of the head, lower than head
+    const rightShCandidates = maxima.filter(m => m > head + 15 && smooth[m] < headPrice && m < n - 5);
+    if (!leftShCandidates.length || !rightShCandidates.length) continue;
+
+    for (const leftSh of leftShCandidates) {
+      // Inner-left trough: deepest min between left shoulder and head
+      const ltCands = minima.filter(m => m > leftSh && m < head);
+      if (!ltCands.length) continue;
+      const leftTrough = ltCands.reduce((a, b) => smooth[a] < smooth[b] ? a : b);
+
+      for (const rightSh of rightShCandidates) {
+        // Inner-right trough: deepest min between head and right shoulder
+        const rtCands = minima.filter(m => m > head && m < rightSh);
+        if (!rtCands.length) continue;
+        const rightTrough = rtCands.reduce((a, b) => smooth[a] < smooth[b] ? a : b);
+
+        const leftShPrice    = smooth[leftSh];
+        const rightShPrice   = smooth[rightSh];
+        const leftTroughPrice  = smooth[leftTrough];
+        const rightTroughPrice = smooth[rightTrough];
+
+        const shoulderAvg = (leftShPrice + rightShPrice) / 2;
+
+        // Head height above shoulders (ideal 10–30%, max ~50%)
+        const headDepth = (headPrice - shoulderAvg) / shoulderAvg;
+        if (headDepth < 0.05 || headDepth > 0.50) continue;
+        let headDepthScore;
+        if (headDepth >= 0.10 && headDepth <= 0.30) headDepthScore = 1.0;
+        else if (headDepth < 0.10) headDepthScore = headDepth / 0.10;
+        else headDepthScore = Math.max(0, 1 - (headDepth - 0.30) / 0.20);
+
+        // Duration
+        const totalLen = rightSh - leftSh;
+        if (totalLen < MIN_TOTAL || totalLen > MAX_TOTAL) continue;
+        const durationScore = Math.max(0, Math.exp(-Math.pow((totalLen - IDEAL_TOTAL) / (IDEAL_TOTAL * 0.55), 2)));
+
+        // Shoulder symmetry (price)
+        const shoulderSym = 1 - Math.abs(leftShPrice - rightShPrice) / shoulderAvg;
+        if (shoulderSym < 0.90) continue;
+
+        // Neckline through the two inner troughs
+        const troughAvg = (leftTroughPrice + rightTroughPrice) / 2;
+        const necklineTilt = Math.abs(rightTroughPrice - leftTroughPrice) / (troughAvg || 1);
+        if (necklineTilt > 0.10) continue;
+        const necklineScore = Math.max(0, 1 - necklineTilt / 0.10);
+
+        const necklineSlope = (rightTroughPrice - leftTroughPrice) / (rightTrough - leftTrough);
+        const necklineAt = (idx) => leftTroughPrice + necklineSlope * (idx - leftTrough);
+
+        // Shoulder width symmetry
+        const leftWidth  = head - leftSh;
+        const rightWidth = rightSh - head;
+        const widthSym = 1 - Math.abs(leftWidth - rightWidth) / (leftWidth + rightWidth);
+        if (widthSym < 0.40) continue;
+
+        // Shoulders not elevated too far above neckline vs head
+        const leftShoulderHeight  = (leftShPrice  - necklineAt(leftSh))  / (headPrice - necklineAt(head));
+        const rightShoulderHeight = (rightShPrice - necklineAt(rightSh)) / (headPrice - necklineAt(head));
+        const shallowScore = Math.max(0, Math.min(1,
+          1 - ((leftShoulderHeight + rightShoulderHeight) / 2 - 0.4) / 0.5
+        ));
+
+        // Shape: shoulders rounded (∩), head sharp (Λ)
+        const roundedness = (idx, half) => {
+          let s = 0, c = 0;
+          for (let i = Math.max(0, idx - half); i <= Math.min(n - 1, idx + half); i++) { s += smooth[i]; c++; }
+          const mean = s / c;
+          return 1 - Math.min(1, Math.abs(mean - smooth[idx]) / (smooth[idx] || 1) / 0.04);
+        };
+        const leftRound  = roundedness(leftSh, 8);
+        const rightRound = roundedness(rightSh, 8);
+        const headSharp  = 1 - roundedness(head, 5);
+        const shapeScore = Math.max(0, Math.min(1, (leftRound + rightRound) / 2 * 0.6 + headSharp * 0.4));
+
+        // Volume profile: highest at left shoulder, declines toward head peak,
+        // rises slightly at right trough, then dries up — breakdown on volume surge
+        const volAround = (idx, half) => {
+          let s = 0, c = 0;
+          for (let i = Math.max(0, idx - half); i <= Math.min(n - 1, idx + half); i++) { s += volumes[i]; c++; }
+          return c ? s / c : avgVolAll;
+        };
+        const vLeftSh   = volAround(leftSh, 6);
+        const vHead     = volAround(head, 6);
+        const vRightTr  = volAround(rightTrough, 6);
+        const vRightSh  = volAround(rightSh, 6);
+        let volScore = 0;
+        if (vLeftSh > vHead)    volScore += 0.34;  // declining into head
+        if (vRightSh < vHead)   volScore += 0.33;  // right shoulder weaker
+        if (vRightTr < vRightSh) volScore += 0.33; // volume drying up
+
+        // Breakdown: close below neckline
+        const breakdownBar = Math.min(n - 1, rightSh + Math.max(5, Math.round(rightWidth * 0.5)));
+        const necklineAtBreak = necklineAt(breakdownBar);
+        const supportLevel = Math.min(leftTroughPrice, rightTroughPrice);
+        const refClose = closes[breakdownBar];
+        const triggerLevel = Math.min(necklineAtBreak, supportLevel);
+        const breakdownCleared = refClose < triggerLevel;
+        const headHeight = headPrice - shoulderAvg || 1;
+        const distToTrigger = (refClose - triggerLevel) / headHeight;
+        const breakoutProx = breakdownCleared ? 1.0 : Math.max(0, 1 - Math.max(0, distToTrigger) / 0.5);
+
+        // Breakdown volume surge
+        const v0 = volumes[breakdownBar] || 0, v1 = volumes[breakdownBar - 1] || 0, v2 = volumes[breakdownBar - 2] || 0;
+        const breakVol = (v0 + v1 + v2) / 3;
+        const volSurge = Math.max(0, Math.min(1, (breakVol / avgVolAll - 1) / 0.5));
+
+        // Area fit: how closely price hugs the ∩-V-∩ ideal shape
+        // Build ghost: straight segments through the anchor points
+        const anchors = [
+          { idx: leftSh,     y: leftShPrice },
+          { idx: leftTrough, y: leftTroughPrice },
+          { idx: head,       y: headPrice },
+          { idx: rightTrough,y: rightTroughPrice },
+          { idx: rightSh,    y: rightShPrice },
+        ];
+        if (breakdownBar > rightSh) anchors.push({ idx: breakdownBar, y: necklineAt(breakdownBar) });
+        const ghostPts = [];
+        const seenHS = new Set();
+        for (let a = 0; a < anchors.length - 1; a++) {
+          const A = anchors[a], B = anchors[a + 1];
+          const w = B.idx - A.idx;
+          if (w <= 0) continue;
+          for (let i = A.idx; i <= B.idx; i++) {
+            if (seenHS.has(i)) continue;
+            seenHS.add(i);
+            const t = (i - A.idx) / w;
+            ghostPts.push({ idx: i, ghostShape: A.y + (B.y - A.y) * t, ghostNeck: necklineAt(i) });
+          }
+        }
+        let areaFitDev = 0, areaFitCount = 0;
+        for (const g of ghostPts) {
+          const px = smooth[g.idx];
+          if (px == null) continue;
+          areaFitDev += Math.abs(px - g.ghostShape);
+          areaFitCount++;
+        }
+        const areaFit = areaFitCount ? Math.max(0, 1 - (areaFitDev / areaFitCount) / (headHeight * 0.4)) : 0;
+
+        // Composite (mirrors RHS weights)
+        const composite =
+          headDepthScore * 0.14 +
+          shoulderSym    * 0.20 +
+          areaFit        * 0.12 +
+          widthSym       * 0.08 +
+          necklineScore  * 0.18 +
+          shallowScore   * 0.06 +
+          shapeScore     * 0.07 +
+          durationScore  * 0.05 +
+          volScore       * 0.06 +
+          breakoutProx   * 0.03 +
+          volSurge       * 0.01;
+
+        if (composite > bestScore) {
+          bestScore = composite;
+          best = {
+            setupType: "hs",
+            score: composite,
+            triggerLevel,
+            distanceToTrigger: Math.max(0, distToTrigger),
+            triggered: breakdownCleared,
+            breakoutProx,
+            volConf: volScore,
+            recentMomentum: computeRecentMomentum(ohlcv, 10),
+            leftShoulderIdx: leftSh, headIdx: head, rightShoulderIdx: rightSh,
+            leftPeakIdx: leftTrough, rightPeakIdx: rightTrough,
+            leftShPrice, rightShPrice, headPrice,
+            leftPeakPrice: leftTroughPrice, rightPeakPrice: rightTroughPrice,
+            headDepth, shoulderSym, widthSym, necklineScore, shallowScore,
+            shapeScore, durationScore, totalLen, necklineSlope, breakoutBar,
+            areaFit, volSurge, breakoutCleared,
+            necklineLeftIdx:   leftTrough,
+            necklineLeftPrice: leftTroughPrice,
+            necklineRightIdx:  rightTrough,
+            necklineRightPrice: rightTroughPrice,
+            necklineEnd: Math.min(n - 1, rightSh + Math.round(rightWidth)),
+            necklineEndPrice: necklineAt(Math.min(n - 1, rightSh + Math.round(rightWidth))),
+            keyLevels: [
+              { idx: leftSh,  label: "L Shoulder", color: "#ef5350" },
+              { idx: head,    label: "Head",        color: "#ffd54f" },
+              { idx: rightSh, label: "R Shoulder",  color: "#ef5350" },
+            ],
+            radar: {
+              rimSymmetry: shoulderSym,
+              areaSymmetry: areaFit,
+              spanSymmetry: widthSym,
+              depthScore: headDepthScore,
+              handleQuality: shapeScore,
+              breakoutProx,
+              volumeConf: volScore,
+              gradConf: volSurge,
+              pulseStr: breakoutProx,
+              recentMomentum: computeRecentMomentum(ohlcv, 10),
+              necklineScore, widthSym, shoulderSym,
+            },
+            ghostCurve: ghostPts,
+          };
+        }
+      }
+    }
+  }
+  return best;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ROUNDED TOP (Inverted Cup & Handle) DETECTOR
+// ───────────────────────────────────────────────────────────────
+// Structure: a rounded arc peak (∩-shaped top) followed by a brief
+// bounce/distribution shelf (the "handle" on a high), then breakdown
+// below the rim level. Mirror of detectCupAndHandle.
+// Prior trend context: price should be entering the top from an uptrend
+// (above its 50-bar MA at the left rim). Scored via trendPenalty.
+// ═══════════════════════════════════════════════════════════════
+function detectRoundedTop(ohlcv, tol) {
+  if (ohlcv.length < tol.minBars) return null;
+
+  const closes  = ohlcv.map(r => r.close);
+  const volumes = ohlcv.map(r => r.volume);
+  const smooth  = wmaSmooth(closes, tol.smoothing);
+
+  // For inverted cup we need maxima as the "rims" and the peak as the top
+  const maxima = findLocalMaxima(smooth);
+  const minima = findLocalMinima(smooth);
+  if (maxima.length < 1 || minima.length < 2) return null;
+
+  let best = null;
+  let bestScore = -1;
+
+  // The "cup peak" (inverted vertex) = the highest point — we iterate over maxima
+  for (const topIdx of maxima) {
+    // Left rim candidates: local maxima to the LEFT of the top that are LOWER
+    const leftRimCandidates = maxima.filter(m => m < topIdx - 10 && smooth[m] < smooth[topIdx]);
+    if (!leftRimCandidates.length) continue;
+    const leftRim = leftRimCandidates.reduce((a, b) => smooth[a] > smooth[b] ? a : b); // highest left rim
+
+    // Right rim candidates: local maxima to the RIGHT that are within ±20% of left rim
+    const leftPrice = smooth[leftRim];
+    const rimTol = leftPrice * 0.20;
+    const rightRimCandidates = maxima.filter(
+      m => m > topIdx + 10 && m < ohlcv.length - 20 && Math.abs(smooth[m] - leftPrice) <= rimTol
+    );
+    if (!rightRimCandidates.length) continue;
+    const rightRim = rightRimCandidates[0]; // prefer first
+
+    const rightPrice = smooth[rightRim];
+    const topPrice   = smooth[topIdx];
+    const rimAvg     = (leftPrice + rightPrice) / 2;
+
+    // Top must be above rims
+    const cupDepth = (topPrice - rimAvg) / rimAvg;
+    if (cupDepth < tol.cupDepth[0] || cupDepth > tol.cupDepth[1]) continue;
+
+    // Rim symmetry
+    const rimSymmetry = 1 - Math.abs(leftPrice - rightPrice) / rimAvg;
+    if (rimSymmetry < 0.80) continue;
+
+    // Area symmetry (left and right of the inverted vertex)
+    const areaSymmetry = computeAreaSymmetry(smooth, leftRim, topIdx, rightRim, rimAvg);
+    const spanSymmetry = computeSpanSymmetry(leftRim, topIdx, rightRim);
+
+    // Handle: brief bounce after the right rim (price consolidates near rim, not much lower)
+    const cupWidth = rightRim - leftRim;
+    const handleWindow = Math.max(15, Math.round(cupWidth * 0.25));
+    const handleSlice  = smooth.slice(rightRim, Math.min(rightRim + handleWindow, smooth.length));
+    if (handleSlice.length < 10) continue;
+
+    // Handle for a rounded top = a bounce (local max) above the right rim then fades
+    // OR a distribution shelf (price stays near the right rim level)
+    const handleMax = Math.max(...handleSlice);
+    const handleMaxIdx = handleSlice.indexOf(handleMax) + rightRim;
+    // Handle retrace = how far the handle MAX rose above the right rim vs the top
+    const handleBounce = (handleMax - rightPrice) / (topPrice - rightPrice);
+    if (handleBounce < 0.05) continue; // must have some bounce
+    // Penalise if handle bounces all the way back to the top (not a distribution)
+    if (handleBounce > 0.70) continue;
+
+    // Volume bowl (inverted): high at rims, lower at top — same shape as cup
+    const cupLen = rightRim - leftRim;
+    const t1 = Math.floor(cupLen / 3);
+    const t2 = Math.floor((cupLen * 2) / 3);
+    const avgVol = (start, end) => {
+      const slice = volumes.slice(leftRim + start, leftRim + end);
+      return slice.length ? slice.reduce((a, b) => a + b, 0) / slice.length : 0;
+    };
+    const volFirst  = avgVol(0, t1);
+    const volMiddle = avgVol(t1, t2);
+    const volLast   = avgVol(t2, cupLen);
+    const volBowl = (volFirst > volMiddle && volLast > volMiddle)
+      ? Math.min(1, ((volFirst - volMiddle) / (volMiddle + 1) + (volLast - volMiddle) / (volMiddle + 1)) * 0.5)
+      : 0;
+    const rimVol    = (volumes[leftRim] + volumes[rightRim]) / 2;
+    const topVolAvg = volumes.slice(Math.max(0, topIdx - 5), Math.min(volumes.length, topIdx + 5))
+      .reduce((a, b) => a + b, 0) / 10;
+    const volConf = rimVol > topVolAvg ? Math.min(1, rimVol / (topVolAvg * 1.5)) : 0.3;
+    const volConfFinal = Math.min(1, volConf * 0.6 + volBowl * 0.4);
+
+    // Breakdown proximity: last close below the right rim level
+    const lastClose = closes[closes.length - 1];
+    const clearance = (rightPrice - lastClose) / rightPrice; // >0 = already broken down
+    const breakoutCleared = clearance >= 0;
+    const breakoutProx = breakoutCleared
+      ? Math.min(1, 0.5 + clearance * 10)
+      : Math.max(0, 0.5 + clearance * 5);
+
+    // Recent volume trend
+    const handleVolAvg = volumes.slice(rightRim, Math.min(rightRim + handleWindow, volumes.length))
+      .reduce((a, b) => a + b, 0) / Math.max(1, handleWindow);
+    const recentVolAvg = volumes.slice(Math.max(0, volumes.length - 5))
+      .reduce((a, b) => a + b, 0) / 5;
+    const volPickup = handleVolAvg > 0 ? Math.min(1, recentVolAvg / handleVolAvg) : 0.5;
+    const breakoutProxFinal = breakoutProx * 0.6 + volPickup * 0.4;
+
+    // Depth and handle quality scores
+    const depthScore    = 1 - Math.abs(cupDepth - 0.3) / 0.3;
+    const handleQuality = 1 - Math.abs(handleBounce - 0.25) / 0.25;
+
+    // Trend context: entering from an uptrend is REQUIRED for a valid rounded top
+    // (a rounded top in a downtrend is just a continuation — not the same pattern)
+    const ma50 = (() => {
+      const slice = closes.slice(Math.max(0, leftRim - 50), leftRim + 1);
+      return slice.reduce((a, b) => a + b, 0) / slice.length;
+    })();
+    const trendScore = closes[leftRim] > ma50 ? 1.0 : 0.4;
+
+    // Gradient conformance (inverted: expect positive then negative arc)
+    // We reuse the same function but the cup/handle zones are now arc/distribution
+    const gradConf = (() => {
+      const zoneSignal = (start, end) => {
+        if (end <= start) return 0;
+        const sl = ohlcv.slice(start, end);
+        const sigs = sl.map(classifyCandle);
+        return sigs.reduce((a, b) => a + b, 0) / sigs.length;
+      };
+      const midAscent  = Math.floor((leftRim + topIdx) / 2);
+      const midDescent = Math.floor((topIdx + rightRim) / 2);
+      const ascent  = zoneSignal(leftRim, midAscent);
+      const topZone = zoneSignal(midAscent, topIdx + 1);
+      const descent = zoneSignal(topIdx + 1, midDescent);
+      const rimZone = zoneSignal(midDescent, rightRim + 1);
+      const handle  = zoneSignal(rightRim, Math.min(rightRim + handleWindow, ohlcv.length));
+      let s = 0;
+      if (ascent  > 0.1)  s += 0.25; else if (ascent > 0) s += 0.10;
+      if (topZone < ascent) s += 0.20;
+      if (descent < 0)   s += 0.25; else if (descent < 0.1) s += 0.10;
+      if (rimZone < descent && rimZone < 0) s += 0.20; else if (rimZone < 0) s += 0.10;
+      if (handle >= -0.3 && handle <= 0.3) s += 0.10;
+      return Math.min(1, s);
+    })();
+
+    // Pulse signals at key points (bearish equivalents)
+    const rimScanStart = Math.max(0, rightRim - 8);
+    const rimScanEnd   = Math.min(ohlcv.length, rightRim + 9);
+    const rimSignal    = detectEngulf3x3(ohlcv.slice(rimScanStart, rimScanEnd));
+    const vtxScanStart = Math.max(0, topIdx - 8);
+    const vtxScanEnd   = Math.min(ohlcv.length, topIdx + 9);
+    const vtxSignal    = detectEngulf3x3(ohlcv.slice(vtxScanStart, vtxScanEnd));
+
+    const rimBonus  = rimSignal.bearish ? (rimSignal.strength === 2 ? 1.0 : 0.7) : 0;
+    const vtxBonus  = vtxSignal.bearish ? (vtxSignal.strength === 2 ? 0.8 : 0.5) : 0;
+    const handleSliceOhlcv = ohlcv.slice(rightRim, Math.min(rightRim + handleWindow, ohlcv.length));
+    const handleStreakVal = computeStreak(handleSliceOhlcv);
+    // For bearish: negative streak is good
+    const handleStreakScore = handleStreakVal <= -3 ? 1.0
+      : handleStreakVal < 0 ? 0.5 + (Math.abs(handleStreakVal) / 3) * 0.5
+      : handleStreakVal === 0 ? 0.5
+      : Math.max(0, 0.5 - handleStreakVal * 0.15);
+    const pulseBonus = Math.min(1, handleStreakScore * 0.5 + rimBonus * 0.3 + vtxBonus * 0.2);
+
+    const recentMomentum = computeRecentMomentum(ohlcv, 10);
+
+    const composite =
+      rimSymmetry   * 0.07 +
+      areaSymmetry  * 0.09 +
+      spanSymmetry  * 0.07 +
+      Math.max(0, depthScore)    * 0.14 +
+      Math.max(0, handleQuality) * 0.14 +
+      breakoutProxFinal * 0.22 +
+      volConfFinal  * 0.15 +
+      trendScore    * 0.07 +
+      pulseBonus    * 0.05 +
+      gradConf      * 0.05;
+
+    if (composite > bestScore) {
+      bestScore = composite;
+      // Ghost curve: inverted U arc
+      const ghostCurve = [];
+      const width = rightRim - leftRim;
+      for (let i = leftRim; i <= Math.min(rightRim + 40, ohlcv.length - 1); i++) {
+        if (i <= rightRim) {
+          const t = (i - leftRim) / width;
+          const y = rimAvg + (topPrice - rimAvg) * (1 - Math.pow(2 * t - 1, 2));
+          ghostCurve.push({ idx: i, ghost: y });
+        } else {
+          const t = i - rightRim;
+          ghostCurve.push({ idx: i, ghost: rimAvg + (topPrice - rimAvg) * 0.15 * (t / 40) });
+        }
+      }
+
+      best = {
+        setupType: "rt",
+        score: composite,
+        leftRim, cupBottom: topIdx, rightRim, handleMinIdx: handleMaxIdx,
+        leftPrice, rightPrice, bottomPrice: topPrice, handleMin: handleMax, rimAvg,
+        cupDepth, handleRetrace: handleBounce, volConf: volConfFinal, breakoutProx: breakoutProxFinal,
+        rimSymmetry, areaSymmetry, spanSymmetry,
+        volBowl, volPickup, breakoutCleared,
+        pulseBonus, gradConf, handleStreakVal, recentMomentum,
+        rimSignalBearish: rimSignal.bearish, rimSignalStrength: rimSignal.strength,
+        vtxSignalBearish: vtxSignal.bearish,
+        radar: {
+          rimSymmetry,
+          areaSymmetry,
+          spanSymmetry,
+          depthScore: Math.max(0, depthScore),
+          handleQuality: Math.max(0, handleQuality),
+          breakoutProx: breakoutProxFinal,
+          volumeConf: volConfFinal,
+          gradConf,
+          pulseStr: pulseBonus,
+          recentMomentum,
+        },
+        ghostCurve,
+      };
+    }
+  }
+  return best;
+}
+
 // ─── Forming pattern detector ─────────────────────────────────────────────────
 // Stage-gated: confirms left rim + bottom only (no right rim yet).
 // Returns null if a full pattern was already found, or a partial result
@@ -1207,9 +1668,9 @@ async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto")
       if (cancelRef.current) break;
       const ohlcv = dataMap.get(ticker);
       try {
-        // Detect BOTH setups so the UI can toggle without re-scanning
-        const { cup, rhs } = detectAllSetups(ohlcv, tol, windowMode);
-        const active = activeSetup === "rhs" ? rhs : cup;
+        // Detect ALL setups so the UI can toggle without re-scanning
+        const { cup, rhs, hs, rt } = detectAllSetups(ohlcv, tol, windowMode);
+        const active = activeSetup === "rhs" ? rhs : activeSetup === "hs" ? hs : activeSetup === "rt" ? rt : cup;
         results.push({
           ticker, bars: ohlcv.length,
           // Top-level mirrors the ACTIVE setup (keeps leaderboard code working)
@@ -1218,11 +1679,11 @@ async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto")
           forming: active.forming || null,
           barsFromEnd: active.barsFromEnd,
           window: active.window,
-          // Both setups stored for toggling
-          cup, rhs,
+          // All setups stored for toggling
+          cup, rhs, hs, rt,
         });
       } catch {
-        results.push({ ticker, score: 0, detection: null, bars: ohlcv?.length || 0, window: "full", cup: null, rhs: null });
+        results.push({ ticker, score: 0, detection: null, bars: ohlcv?.length || 0, window: "full", cup: null, rhs: null, hs: null, rt: null });
       }
     }
 
@@ -1233,7 +1694,7 @@ async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto")
   // Keep tickers that matched EITHER setup (so toggling has candidates),
   // ranked by the active setup's score.
   return results
-    .filter(r => (r.cup?.score > 0) || (r.rhs?.score > 0))
+    .filter(r => (r.cup?.score > 0) || (r.rhs?.score > 0) || (r.hs?.score > 0) || (r.rt?.score > 0))
     .sort((a, b) => b.score - a.score);
 }
 
@@ -1242,7 +1703,7 @@ async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto")
 function repointSetup(scores, setup) {
   return scores
     .map(r => {
-      const active = setup === "rhs" ? r.rhs : r.cup;
+      const active = setup === "rhs" ? r.rhs : setup === "hs" ? r.hs : setup === "rt" ? r.rt : r.cup;
       if (!active) return { ...r, score: 0 };
       return {
         ...r,
@@ -1266,8 +1727,8 @@ function rerank(scores, tol, rawData, windowMode = "auto") {
       const ohlcv = rawData.get(item.ticker);
       if (!ohlcv) return { ...item, score: 0, detection: null, forming: null, cup: null, flag: null };
       try {
-        const { cup, rhs } = detectAllSetups(ohlcv, tol, windowMode);
-        const active = activeSetup === "rhs" ? rhs : cup;
+        const { cup, rhs, hs, rt } = detectAllSetups(ohlcv, tol, windowMode);
+        const active = activeSetup === "rhs" ? rhs : activeSetup === "hs" ? hs : activeSetup === "rt" ? rt : cup;
         return {
           ...item,
           score: active.score,
@@ -1275,13 +1736,13 @@ function rerank(scores, tol, rawData, windowMode = "auto") {
           forming: active.forming || null,
           barsFromEnd: active.barsFromEnd,
           window: active.window,
-          cup, rhs,
+          cup, rhs, hs, rt,
         };
       } catch {
-        return { ...item, score: 0, detection: null, forming: null, cup: null, rhs: null };
+        return { ...item, score: 0, detection: null, forming: null, cup: null, rhs: null, hs: null, rt: null };
       }
     })
-    .filter(r => (r.cup?.score > 0) || (r.rhs?.score > 0))
+    .filter(r => (r.cup?.score > 0) || (r.rhs?.score > 0) || (r.hs?.score > 0) || (r.rt?.score > 0))
     .sort((a, b) => b.score - a.score);
 }
 
@@ -1418,16 +1879,20 @@ function detectBestWindow(ohlcv, tol, windowMode = "auto", forceSetup = null) {
       const activeSetup = forceSetup || tol.activeSetup || "cup";
       const detection = activeSetup === "rhs"
         ? detectReverseHS(slice, tol)
-        : detectCupAndHandle(slice, tol);
+        : activeSetup === "hs"
+          ? detectHeadAndShoulders(slice, tol)
+          : activeSetup === "rt"
+            ? detectRoundedTop(slice, tol)
+            : detectCupAndHandle(slice, tol);
 
       // Forming (partial) detection only applies to cups
-      const forming = (detection || activeSetup === "rhs") ? null : detectFormingPattern(slice, tol, detection);
+      const forming = (detection || activeSetup !== "cup") ? null : detectFormingPattern(slice, tol, detection);
       const score = detection ? detection.score : (forming ? forming.partialScore : 0);
 
       if (score > bestScore) {
         bestScore = score;
-        if (detection && detection.setupType === "rhs") {
-          // Remap reverse-H&S indices back to original ohlcv coordinate space
+        if (detection && (detection.setupType === "rhs" || detection.setupType === "hs")) {
+          // Remap reverse-H&S / H&S indices back to original ohlcv coordinate space
           bestDetection = {
             ...detection,
             leftShoulderIdx:  detection.leftShoulderIdx  + startIdx,
@@ -1445,7 +1910,7 @@ function detectBestWindow(ohlcv, tol, windowMode = "auto", forceSetup = null) {
         } else {
           bestDetection = detection ? {
             ...detection,
-            // Remap cup indices back to original ohlcv coordinate space
+            // Remap cup / rounded-top indices back to original ohlcv coordinate space
             leftRim:      detection.leftRim      + startIdx,
             cupBottom:    detection.cupBottom    + startIdx,
             rightRim:     detection.rightRim     + startIdx,
@@ -1465,7 +1930,7 @@ function detectBestWindow(ohlcv, tol, windowMode = "auto", forceSetup = null) {
   }
 
   const barsFromEnd = bestDetection
-    ? ohlcv.length - 1 - (bestDetection.setupType === "rhs" ? bestDetection.rightShoulderIdx : bestDetection.rightRim)
+    ? ohlcv.length - 1 - ((bestDetection.setupType === "rhs" || bestDetection.setupType === "hs") ? bestDetection.rightShoulderIdx : bestDetection.rightRim)
     : bestForming
       ? ohlcv.length - 1 - bestForming.vertex
       : null;
@@ -1483,11 +1948,13 @@ function detectBestWindow(ohlcv, tol, windowMode = "auto", forceSetup = null) {
 // toggle between cup and flag without re-scanning. Each key holds the same
 // shape detectBestWindow returns (detection/forming/score/window/barsFromEnd).
 function detectAllSetups(ohlcv, tol, windowMode = "auto") {
-  // Both setups sweep the full history (multi-window) so either pattern can sit
+  // All 4 setups sweep the full history (multi-window) so either pattern can sit
   // anywhere in the 5-year span; recency is handled downstream by barsFromEnd.
   const cup = detectBestWindow(ohlcv, tol, windowMode, "cup");
   const rhs = detectBestWindow(ohlcv, tol, windowMode, "rhs");
-  return { cup, rhs };
+  const hs  = detectBestWindow(ohlcv, tol, windowMode, "hs");
+  const rt  = detectBestWindow(ohlcv, tol, windowMode, "rt");
+  return { cup, rhs, hs, rt };
 }
 
 
@@ -1503,12 +1970,13 @@ async function callAI(messages, signal) {
         body: JSON.stringify({
           model: AI_MODEL,
           max_tokens: 1024,
-          system: `You are a trading pattern analysis assistant specializing in cup-and-handle chart patterns.
+          system: `You are a trading pattern analysis assistant specializing in chart pattern detection.
 You help traders understand detection results, interpret scores, and tune parameters.
 Be concise, specific, and reference actual numbers from the context provided.
 When discussing scores, reference the ticker names and percentages directly.
 
-The context may include, for the currently-viewed ticker: a full signal breakdown (cup depth, handle retrace, breakout proximity, gradient conformance, pulse streak, recent momentum, area/span symmetry), recency information (how many bars ago the pattern completed and its recency weight), sector momentum, and — if the user has run it — a previously synthesized "Setup Singularity" verdict with score and rationale.
+The scanner detects 4 setups: Cup & Handle (bullish), Reverse Head & Shoulders (bullish), Head & Shoulders (bearish), and Rounded Top (bearish).
+The context may include, for the currently-viewed ticker: a full signal breakdown (cup/arc depth, handle retrace, breakout/breakdown proximity, gradient conformance, pulse streak, recent momentum, area/span symmetry, shoulder symmetry, neckline score), recency information (how many bars ago the pattern completed and its recency weight), sector momentum, and — if the user has run it — a previously synthesized "Setup Singularity" verdict with score and rationale.
 Weight current momentum (Pulse, Sector, recent momentum) most heavily: strong current momentum can elevate conviction even on an aging structure, while weak momentum undermines an otherwise textbook setup. When a Singularity verdict is present you may reference it, build on it, or respectfully disagree if the underlying signals warrant it.`,
           messages
         })
@@ -2553,7 +3021,7 @@ export default function App() {
     const wantSetup = chartSetup || tolerance.activeSetup || "cup";
     const row = scores.find(s => s.ticker === selectedTicker);
     if (row) {
-      const stored = wantSetup === "rhs" ? row.rhs : row.cup;
+      const stored = wantSetup === "rhs" ? row.rhs : wantSetup === "hs" ? row.hs : wantSetup === "rt" ? row.rt : row.cup;
       if (stored && stored.detection) return stored.detection;
     }
     // Fallback: detect live for the wanted setup
@@ -2571,8 +3039,8 @@ export default function App() {
     const rows = rawData.get(selectedTicker) || [];
     const result = selectedDetection; // honor the chart's setup choice (cup/rhs)
     const ghostMap = new Map((result?.ghostCurve || []).map(g => [g.idx, g.ghost]));
-    // Reverse-H&S neckline (only present when the detected setup is rhs)
-    const isRHS = result?.setupType === "rhs";
+    // Reverse-H&S / H&S neckline (only present when the detected setup is rhs or hs)
+    const isRHS = result?.setupType === "rhs" || result?.setupType === "hs";
     const necklineMap = new Map();
     const rhsShapeMap = new Map();
     if (isRHS) {
@@ -2730,7 +3198,9 @@ export default function App() {
 
   const radarData = useMemo(() => {
     if (!selectedDetection?.radar) return [];
-    const isRHS = selectedDetection.setupType === "rhs";
+    const setupType = selectedDetection.setupType;
+    const isRHSFamily = setupType === "rhs" || setupType === "hs"; // both shoulder setups
+    const isRTFamily  = setupType === "rt"; // rounded top (cup family, bearish)
     // Metric sets per chart tab and setup:
     //  • Gradient view → momentum-only signals (geometry irrelevant)
     //  • Cup pattern   → cup geometry + confirmation
@@ -2745,18 +3215,30 @@ export default function App() {
         { key: "breakoutProx",   label: "Breakout",  direct: "breakoutProx" },
         { key: "volumeConf",     label: "Volume",    direct: null },
       ];
-    } else if (isRHS) {
+    } else if (isRHSFamily) {
       entries = [
         { key: "rimSymmetry",  label: "Shoulder Sym", direct: "shoulderSym" },
         { key: "areaSymmetry", label: "Shape Fit",    direct: "areaFit" },
         { key: "spanSymmetry", label: "Width Sym",    direct: "widthSym" },
         { key: "depthScore",   label: "Head Depth",   direct: null },
-        { key: "handleQuality",label: "U/V Shape",    direct: "shapeScore" },
-        { key: "breakoutProx", label: "Brk Prox",     direct: "breakoutProx" },
+        { key: "handleQuality",label: setupType === "hs" ? "∩/Λ Shape" : "U/V Shape", direct: "shapeScore" },
+        { key: "breakoutProx", label: setupType === "hs" ? "Brkdn Prox" : "Brk Prox", direct: "breakoutProx" },
         { key: "volumeConf",   label: "Volume",       direct: "volConf" },
-        { key: "gradConf",     label: "Brk Vol",      direct: "volSurge" },
+        { key: "gradConf",     label: setupType === "hs" ? "Brkdn Vol" : "Brk Vol", direct: "volSurge" },
         { key: "recentMomentum", label: "Momentum",   direct: "recentMomentum" },
         { key: "necklineScore",  label: "Neckline",   direct: "necklineScore" },
+      ];
+    } else if (isRTFamily) {
+      // Rounded top reuses cup-family axes but labels differ
+      entries = [
+        { key: "rimSymmetry",  label: "Rim Sym",   direct: null },
+        { key: "areaSymmetry", label: "Area Sym",  direct: "areaSymmetry" },
+        { key: "spanSymmetry", label: "Span Sym",  direct: "spanSymmetry" },
+        { key: "depthScore",   label: "Arc Depth", direct: null },
+        { key: "handleQuality",label: "Dist Shelf",direct: null },
+        { key: "breakoutProx", label: "Breakdown", direct: "breakoutProx" },
+        { key: "volumeConf",   label: "Volume",    direct: null },
+        { key: "gradConf",     label: "Gradient",  direct: "gradConf" },
       ];
     } else {
       entries = [
@@ -2964,7 +3446,10 @@ export default function App() {
     if (!scores.length) return;
     const rows = scores.map(s => ({
       Ticker: s.ticker,
-      SetupType: s.detection?.setupType === "rhs" ? "Reverse H&S" : "Cup & Handle",
+      SetupType: s.detection?.setupType === "rhs" ? "Reverse H&S"
+        : s.detection?.setupType === "hs"  ? "Head & Shoulders"
+        : s.detection?.setupType === "rt"  ? "Rounded Top"
+        : "Cup & Handle",
       Score: (s.score * 100).toFixed(1),
       Bars: s.bars,
       Triggered: s.detection?.triggered ? "Yes" : "No",
@@ -3416,44 +3901,64 @@ export default function App() {
           })}
         </div>
 
-        {/* Setup selector (Option A): switches the entire scan between setups */}
+        {/* Setup selector: 2 bullish + 2 bearish */}
         {rawData && rawData.size > 0 && (() => {
-          const opts = [
+          const bullOpts = [
             { id: "cup", label: "⌣ Cup & Handle", color: COLORS.cup },
             { id: "rhs", label: "⋎ Reverse H&S",  color: COLORS.green },
           ];
+          const bearOpts = [
+            { id: "hs",  label: "⋏ H&S",           color: COLORS.red },
+            { id: "rt",  label: "⌢ Rounded Top",    color: COLORS.warning },
+          ];
+          const renderBtn = ({ id, label, color }) => {
+            const active = tolerance.activeSetup === id;
+            return (
+              <button
+                key={id}
+                onClick={() => handleSetupChange(id)}
+                disabled={scanStatus === "scanning"}
+                style={{
+                  fontSize: isMobile ? 11 : 13, fontWeight: active ? 800 : 600,
+                  padding: isMobile ? "6px 10px" : "8px 16px", borderRadius: 9,
+                  cursor: scanStatus === "scanning" ? "wait" : "pointer",
+                  border: `1px solid ${active ? color : COLORS.border}`,
+                  background: active ? `${color}22` : COLORS.surfaceHover,
+                  color: active ? color : COLORS.text,
+                  transition: "all 0.15s", whiteSpace: "nowrap",
+                }}
+              >
+                {label}
+              </button>
+            );
+          };
           return (
             <div style={{
               padding: "10px 16px", borderBottom: `1px solid ${COLORS.border}`,
-              display: "flex", gap: 8, alignItems: "center", flexShrink: 0, background: COLORS.bg,
+              display: "flex", gap: 6, alignItems: "center", flexShrink: 0, background: COLORS.bg,
               flexWrap: "wrap",
             }}>
-              <span style={{ fontSize: 11, color: COLORS.textDim, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", marginRight: 4, whiteSpace: "nowrap" }}>
-                Setup
-              </span>
-              {opts.map(({ id, label, color }) => {
-                const active = tolerance.activeSetup === id;
-                return (
-                  <button
-                    key={id}
-                    onClick={() => handleSetupChange(id)}
-                    disabled={scanStatus === "scanning"}
-                    style={{
-                      fontSize: 13, fontWeight: active ? 800 : 600,
-                      padding: "8px 16px", borderRadius: 9, cursor: scanStatus === "scanning" ? "wait" : "pointer",
-                      border: `1px solid ${active ? color : COLORS.border}`,
-                      background: active ? `${color}22` : COLORS.surfaceHover,
-                      color: active ? color : COLORS.text,
-                      transition: "all 0.15s", whiteSpace: "nowrap",
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
+              {/* Bullish group */}
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap" }}>
+                <span style={{ fontSize: 9, color: COLORS.green, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                  Bull
+                </span>
+                {bullOpts.map(renderBtn)}
+              </div>
+              <div style={{ width: 1, height: 24, background: COLORS.border, flexShrink: 0, margin: "0 2px" }} />
+              {/* Bearish group */}
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap" }}>
+                <span style={{ fontSize: 9, color: COLORS.red, fontWeight: 700, letterSpacing: "0.5px", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                  Bear
+                </span>
+                {bearOpts.map(renderBtn)}
+              </div>
               {!isMobile && (
                 <span style={{ fontSize: 10, color: COLORS.textMuted, marginLeft: 4 }}>
-                  Ranking by {tolerance.activeSetup === "rhs" ? "reverse H&S" : "cup & handle"} · both detected, toggle freely
+                  {tolerance.activeSetup === "rhs" ? "Reverse H&S (bullish)" :
+                   tolerance.activeSetup === "hs"  ? "Head & Shoulders (bearish)" :
+                   tolerance.activeSetup === "rt"  ? "Rounded Top (bearish)" :
+                   "Cup & Handle (bullish)"} · all 4 detected, toggle freely
                 </span>
               )}
             </div>
@@ -3597,7 +4102,25 @@ export default function App() {
                           ⋎ REV H&S
                         </span>
                       )}
-                      {item.detection && item.detection.setupType !== "rhs" && !item.forming && (
+                      {item.detection?.setupType === "hs" && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4,
+                          background: "rgba(239,83,80,0.15)", color: COLORS.red,
+                          border: `1px solid ${COLORS.red}`, letterSpacing: "0.5px"
+                        }}>
+                          ⋏ H&S
+                        </span>
+                      )}
+                      {item.detection?.setupType === "rt" && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4,
+                          background: "rgba(255,152,0,0.15)", color: COLORS.warning,
+                          border: `1px solid ${COLORS.warning}`, letterSpacing: "0.5px"
+                        }}>
+                          ⌢ ROUNDED TOP
+                        </span>
+                      )}
+                      {item.detection && item.detection.setupType !== "rhs" && item.detection.setupType !== "hs" && item.detection.setupType !== "rt" && !item.forming && (
                         <span style={{
                           fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4,
                           background: "rgba(108,143,255,0.12)", color: COLORS.cup,
@@ -3609,10 +4132,14 @@ export default function App() {
                       {item.detection?.triggered && (
                         <span style={{
                           fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 4,
-                          background: "rgba(38,166,154,0.22)", color: COLORS.green,
-                          border: `1px solid ${COLORS.green}`, letterSpacing: "0.5px"
+                          background: (item.detection.setupType === "hs" || item.detection.setupType === "rt")
+                            ? "rgba(239,83,80,0.22)" : "rgba(38,166,154,0.22)",
+                          color: (item.detection.setupType === "hs" || item.detection.setupType === "rt")
+                            ? COLORS.red : COLORS.green,
+                          border: `1px solid ${(item.detection.setupType === "hs" || item.detection.setupType === "rt") ? COLORS.red : COLORS.green}`,
+                          letterSpacing: "0.5px"
                         }}>
-                          BROKE OUT ▲
+                          {(item.detection.setupType === "hs" || item.detection.setupType === "rt") ? "BROKE DOWN ▼" : "BROKE OUT ▲"}
                         </span>
                       )}
                       {item.forming && (
@@ -3645,17 +4172,19 @@ export default function App() {
                     </div>
                     <div style={{ fontSize: 10, color: COLORS.textMuted, marginTop: 2 }}>
                       {item.bars} bars
-                      {item.detection?.setupType === "rhs" ? (
+                      {(item.detection?.setupType === "rhs" || item.detection?.setupType === "hs") ? (
                         <>
-                          {` · head ${(item.detection.headDepth * 100).toFixed(0)}% deep`}
+                          {` · head ${(item.detection.headDepth * 100).toFixed(0)}% ${item.detection.setupType === "hs" ? "above" : "below"} shoulders`}
                           {` · sym ${(item.detection.shoulderSym * 100).toFixed(0)}%`}
                           {item.detection.volSurge > 0.3 && ` · vol surge`}
                         </>
                       ) : (
                         <>
                           {item.detection && ` · depth ${(item.detection.cupDepth * 100).toFixed(0)}%`}
-                          {item.detection && ` · handle ${(item.detection.handleRetrace * 100).toFixed(0)}%`}
-                          {item.detection && item.detection.handleStreakVal > 0 && ` · streak +${item.detection.handleStreakVal}`}
+                          {item.detection && item.detection.setupType !== "rt" && ` · handle ${(item.detection.handleRetrace * 100).toFixed(0)}%`}
+                          {item.detection && item.detection.setupType === "rt" && ` · bounce ${(item.detection.handleRetrace * 100).toFixed(0)}%`}
+                          {item.detection && (item.detection.handleStreakVal > 0) && item.detection.setupType !== "rt" && ` · streak +${item.detection.handleStreakVal}`}
+                          {item.detection && (item.detection.handleStreakVal < 0) && item.detection.setupType === "rt" && ` · streak ${item.detection.handleStreakVal}`}
                         </>
                       )}
                       {item.forming && ` · recovery ${(item.forming.recoveryPct * 100).toFixed(0)}%`}
@@ -3759,39 +4288,44 @@ export default function App() {
               : { display: "flex", gap: 12, flexWrap: "wrap" }}>
               <StatPill label="Score" value={`${(det.score * 100).toFixed(1)}%`} color={COLORS.accent} />
               {/* Cup geometry — only on the Cup & Handle view, cup setups */}
-              {chartSubTab === "pattern" && det.setupType !== "rhs" && (
+              {chartSubTab === "pattern" && det.setupType !== "rhs" && det.setupType !== "hs" && (
                 <>
-                  <StatPill label="Cup Depth" value={`${(det.cupDepth * 100).toFixed(1)}%`} color={COLORS.cup} />
-                  <StatPill label="Handle" value={`${(det.handleRetrace * 100).toFixed(1)}%`} color={COLORS.handle} />
+                  <StatPill label="Arc Depth" value={`${(det.cupDepth * 100).toFixed(1)}%`} color={det.setupType === "rt" ? COLORS.warning : COLORS.cup} />
+                  {det.setupType !== "rt" && <StatPill label="Handle" value={`${(det.handleRetrace * 100).toFixed(1)}%`} color={COLORS.handle} />}
+                  {det.setupType === "rt" && <StatPill label="Dist Shelf" value={`${(det.handleRetrace * 100).toFixed(1)}%`} color={COLORS.warning} />}
                 </>
               )}
-              {/* Reverse H&S geometry — only on the pattern view, rhs setups */}
-              {chartSubTab === "pattern" && det.setupType === "rhs" && (
+              {/* H&S / Rev H&S geometry */}
+              {chartSubTab === "pattern" && (det.setupType === "rhs" || det.setupType === "hs") && (
                 <>
                   <StatPill label="Head Depth" value={`${(det.headDepth * 100).toFixed(0)}%`}
-                    color={det.headDepth >= 0.1 && det.headDepth <= 0.3 ? COLORS.green : det.headDepth <= 0.5 ? COLORS.gold : COLORS.text} />
+                    color={det.headDepth >= 0.1 && det.headDepth <= 0.3 ? (det.setupType === "hs" ? COLORS.red : COLORS.green) : det.headDepth <= 0.5 ? COLORS.gold : COLORS.text} />
                   <StatPill label="Shoulder Sym" value={`${(det.shoulderSym * 100).toFixed(0)}%`}
-                    color={det.shoulderSym > 0.9 ? COLORS.green : det.shoulderSym > 0.8 ? COLORS.gold : COLORS.text} />
+                    color={det.shoulderSym > 0.9 ? (det.setupType === "hs" ? COLORS.red : COLORS.green) : det.shoulderSym > 0.8 ? COLORS.gold : COLORS.text} />
                 </>
               )}
               {/* Momentum signals — shown on both views */}
               <StatPill label="Momentum (10d)" value={`${(det.recentMomentum * 100).toFixed(0)}%`} color={det.recentMomentum > 0.6 ? COLORS.green : det.recentMomentum < 0.4 ? COLORS.red : COLORS.textDim} />
               <StatPill label="Breakout" value={`${(det.breakoutProx * 100).toFixed(1)}%`}
                 color={det.breakoutProx > 0.8 ? COLORS.green : COLORS.text} />
-              {det.setupType === "rhs"
+              {(det.setupType === "rhs" || det.setupType === "hs")
                 ? <StatPill label="Vol Surge" value={`${(det.volSurge * 100).toFixed(0)}%`}
-                    color={det.volSurge > 0.5 ? COLORS.green : det.volSurge > 0.25 ? COLORS.gold : COLORS.textDim} />
+                    color={det.volSurge > 0.5 ? (det.setupType === "hs" ? COLORS.red : COLORS.green) : det.volSurge > 0.25 ? COLORS.gold : COLORS.textDim} />
                 : <StatPill label="Gradient" value={`${(det.gradConf * 100).toFixed(1)}%`}
                     color={det.gradConf > 0.7 ? COLORS.green : det.gradConf > 0.45 ? COLORS.gold : COLORS.textDim} />
               }
-              {det.setupType !== "rhs" && (
+              {(det.setupType !== "rhs" && det.setupType !== "hs") && (
                 <StatPill label="Pulse" value={
                   det.handleStreakVal > 0 ? `+${det.handleStreakVal}` :
                   det.handleStreakVal < 0 ? `${det.handleStreakVal}` : "0"
-                } color={det.pulseBonus > 0.6 ? COLORS.green : det.pulseBonus > 0.35 ? COLORS.gold : COLORS.textDim} />
+                } color={
+                  det.setupType === "rt"
+                    ? (det.pulseBonus > 0.6 ? COLORS.red : det.pulseBonus > 0.35 ? COLORS.gold : COLORS.textDim)
+                    : (det.pulseBonus > 0.6 ? COLORS.green : det.pulseBonus > 0.35 ? COLORS.gold : COLORS.textDim)
+                } />
               )}
-              {/* Symmetry — cup pattern view */}
-              {chartSubTab === "pattern" && det.setupType !== "rhs" && (
+              {/* Symmetry — cup / rt pattern view */}
+              {chartSubTab === "pattern" && det.setupType !== "rhs" && det.setupType !== "hs" && (
                 <>
                   <StatPill label="Area Sym" value={`${(det.areaSymmetry * 100).toFixed(1)}%`}
                     color={det.areaSymmetry > 0.75 ? COLORS.green : det.areaSymmetry > 0.5 ? COLORS.gold : COLORS.textDim} />
@@ -3799,8 +4333,8 @@ export default function App() {
                     color={det.spanSymmetry > 0.65 ? COLORS.green : det.spanSymmetry > 0.4 ? COLORS.gold : COLORS.textDim} />
                 </>
               )}
-              {/* Reverse H&S extra geometry */}
-              {chartSubTab === "pattern" && det.setupType === "rhs" && (
+              {/* H&S extra geometry */}
+              {chartSubTab === "pattern" && (det.setupType === "rhs" || det.setupType === "hs") && (
                 <>
                   <StatPill label="Neckline" value={`${(det.necklineScore * 100).toFixed(0)}%`}
                     color={det.necklineScore > 0.7 ? COLORS.green : det.necklineScore > 0.45 ? COLORS.gold : COLORS.textDim} />
@@ -3831,6 +4365,8 @@ export default function App() {
               const row = scores.find(s => s.ticker === selectedTicker);
               const hasCup = !!row?.cup?.detection;
               const hasRHS = !!row?.rhs?.detection;
+              const hasHS  = !!row?.hs?.detection;
+              const hasRT  = !!row?.rt?.detection;
               // On the pattern view, the active pattern is chartSetup (override)
               // or the leaderboard's active setup. On gradient view, none is "active".
               const activePattern = chartSubTab === "pattern"
@@ -3846,8 +4382,8 @@ export default function App() {
                     handleSetupChange(id, has);
                   }}
                   style={{
-                    padding: isMobile ? "8px 12px" : "11px 18px", borderRadius: 9,
-                    fontSize: isMobile ? 12 : 14, fontWeight: 700,
+                    padding: isMobile ? "6px 10px" : "11px 16px", borderRadius: 9,
+                    fontSize: isMobile ? 11 : 13, fontWeight: 700,
                     border: `1px solid ${activePattern === id ? color : COLORS.border}`,
                     background: activePattern === id ? `${color}22` : COLORS.surfaceHover,
                     color: activePattern === id ? color : (has ? COLORS.text : COLORS.textDim),
@@ -3860,20 +4396,22 @@ export default function App() {
 
               return (
                 <>
-                  {setupBtn("cup", "⌣ Cup & Handle", hasCup, COLORS.cup)}
-                  {setupBtn("rhs", "⋎ Reverse H&S", hasRHS, COLORS.green)}
+                  {setupBtn("cup", "⌣ Cup",        hasCup, COLORS.cup)}
+                  {setupBtn("rhs", "⋎ Rev H&S",    hasRHS, COLORS.green)}
+                  {setupBtn("hs",  "⋏ H&S",        hasHS,  COLORS.red)}
+                  {setupBtn("rt",  "⌢ Rnd Top",    hasRT,  COLORS.warning)}
                   <button
                     onClick={() => setChartSubTab("gradient")}
                     style={{
-                      padding: isMobile ? "8px 12px" : "11px 18px", borderRadius: 9,
-                      fontSize: isMobile ? 12 : 14, fontWeight: 700, flexShrink: 0,
+                      padding: isMobile ? "6px 10px" : "11px 16px", borderRadius: 9,
+                      fontSize: isMobile ? 11 : 13, fontWeight: 700, flexShrink: 0,
                       border: `1px solid ${chartSubTab === "gradient" ? COLORS.accent : COLORS.border}`,
                       background: chartSubTab === "gradient" ? COLORS.accentDim : COLORS.surfaceHover,
                       color: chartSubTab === "gradient" ? COLORS.accent : COLORS.text,
                       cursor: "pointer", whiteSpace: "nowrap",
                     }}
                   >
-                    ≈ Momentum Gradient
+                    ≈ Gradient
                   </button>
                 </>
               );
@@ -3973,11 +4511,11 @@ export default function App() {
                         <Cell key={i} fill={d.close >= d.open ? COLORS.green : COLORS.red} />
                       ))}
                     </Bar>
-                    {/* Cup: single ideal ghost curve */}
-                    {det?.setupType !== "rhs" && (
+                    {/* Cup / Rounded Top: single ideal ghost curve */}
+                    {(det?.setupType !== "rhs" && det?.setupType !== "hs") && (
                       <Line
                         dataKey="ghost"
-                        stroke={COLORS.ghost}
+                        stroke={det?.setupType === "rt" ? COLORS.warning : COLORS.ghost}
                         strokeWidth={2.5}
                         dot={false}
                         strokeDasharray="6 4"
@@ -3985,42 +4523,46 @@ export default function App() {
                         connectNulls={false}
                       />
                     )}
-                    {/* Reverse H&S: purple outline tracing the swings
-                        (L shoulder→peak→head→peak→R shoulder) */}
-                    {det?.setupType === "rhs" && (
+                    {/* Reverse H&S / H&S: outline tracing the swings */}
+                    {(det?.setupType === "rhs" || det?.setupType === "hs") && (
                       <Line
                         dataKey="rhsShape"
-                        stroke="#a855f7"
+                        stroke={det?.setupType === "hs" ? COLORS.red : "#a855f7"}
                         strokeWidth={2.5}
                         dot={false}
                         isAnimationActive={false}
                         connectNulls
                       />
                     )}
-                    {/* Reverse H&S: neckline through the two real peaks — this is
-                        exactly the segment the necklineScore rates, so the drawn
-                        slope matches the rating. Extended to the breakout bar. */}
-                    {det?.setupType === "rhs" && det.necklineLeftPrice != null && (
+                    {/* Neckline for rhs/hs */}
+                    {(det?.setupType === "rhs" || det?.setupType === "hs") && det.necklineLeftPrice != null && (
                       <ReferenceLine
                         segment={[
                           { x: det.necklineLeftIdx,  y: det.necklineLeftPrice },
                           { x: det.necklineRightIdx, y: det.necklineRightPrice },
                         ]}
-                        stroke={COLORS.green}
+                        stroke={det?.setupType === "hs" ? COLORS.red : COLORS.green}
                         strokeWidth={2}
                         strokeDasharray="6 4"
-                        label={isMobile ? undefined : { value: "Neckline", fill: COLORS.green, fontSize: 10, position: "insideTopLeft" }}
+                        label={isMobile ? undefined : { value: "Neckline", fill: det?.setupType === "hs" ? COLORS.red : COLORS.green, fontSize: 10, position: "insideTopLeft" }}
                       />
                     )}
-                    {/* Reference lines — keyLevels for RHS, named indices for cup. */}
-                    {det && (det.setupType === "rhs"
+                    {/* Reference lines — keyLevels for rhs/hs, named indices for cup/rt. */}
+                    {det && ((det.setupType === "rhs" || det.setupType === "hs")
                       ? (det.keyLevels || [])
-                      : [
-                        { idx: det.leftRim, label: "L Rim", color: COLORS.cup },
-                        { idx: det.cupBottom, label: "Bottom", color: COLORS.accent },
-                        { idx: det.rightRim, label: "R Rim", color: COLORS.cup },
-                        { idx: det.handleMinIdx, label: "Handle", color: COLORS.handle },
-                      ]
+                      : det.setupType === "rt"
+                        ? [
+                          { idx: det.leftRim,      label: "L Rim",  color: COLORS.warning },
+                          { idx: det.cupBottom,    label: "Top",    color: COLORS.red },
+                          { idx: det.rightRim,     label: "R Rim",  color: COLORS.warning },
+                          { idx: det.handleMinIdx, label: "Bounce", color: COLORS.gold },
+                        ]
+                        : [
+                          { idx: det.leftRim,      label: "L Rim",  color: COLORS.cup },
+                          { idx: det.cupBottom,    label: "Bottom", color: COLORS.accent },
+                          { idx: det.rightRim,     label: "R Rim",  color: COLORS.cup },
+                          { idx: det.handleMinIdx, label: "Handle", color: COLORS.handle },
+                        ]
                     ).map(({ idx, label, color }, i) => (
                       <ReferenceLine
                         key={label} x={idx}
@@ -4038,24 +4580,31 @@ export default function App() {
               {/* Mobile-only label legend (replaces overlapping in-chart labels) */}
               {isMobile && det && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "2px 8px" }}>
-                  {(det.setupType === "rhs"
+                  {((det.setupType === "rhs" || det.setupType === "hs")
                     ? (det.keyLevels || [])
-                    : [
-                      { label: "L Rim",  color: COLORS.cup },
-                      { label: "Bottom", color: COLORS.accent },
-                      { label: "R Rim",  color: COLORS.cup },
-                      { label: "Handle", color: COLORS.handle },
-                    ]
+                    : det.setupType === "rt"
+                      ? [
+                          { label: "L Rim",  color: COLORS.warning },
+                          { label: "Top",    color: COLORS.red },
+                          { label: "R Rim",  color: COLORS.warning },
+                          { label: "Bounce", color: COLORS.gold },
+                        ]
+                      : [
+                          { label: "L Rim",  color: COLORS.cup },
+                          { label: "Bottom", color: COLORS.accent },
+                          { label: "R Rim",  color: COLORS.cup },
+                          { label: "Handle", color: COLORS.handle },
+                        ]
                   ).map(({ label, color }) => (
                     <div key={label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
                       <div style={{ width: 2, height: 12, background: color, borderRadius: 1, opacity: 0.9 }} />
                       <span style={{ fontSize: 10, color, fontWeight: 600 }}>{label}</span>
                     </div>
                   ))}
-                  {det.setupType === "rhs" && (
+                  {(det.setupType === "rhs" || det.setupType === "hs") && (
                     <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      <div style={{ width: 12, height: 2, background: COLORS.green, borderRadius: 1 }} />
-                      <span style={{ fontSize: 10, color: COLORS.green, fontWeight: 600 }}>Neckline</span>
+                      <div style={{ width: 12, height: 2, background: det.setupType === "hs" ? COLORS.red : COLORS.green, borderRadius: 1 }} />
+                      <span style={{ fontSize: 10, color: det.setupType === "hs" ? COLORS.red : COLORS.green, fontWeight: 600 }}>Neckline</span>
                     </div>
                   )}
                 </div>
@@ -4101,7 +4650,10 @@ export default function App() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".08em", color: COLORS.textDim, marginBottom: 8 }}>
-                {det?.setupType === "rhs" ? "Reverse H&S structure" : "Cup & Handle structure"}
+                {det?.setupType === "rhs" ? "Reverse H&S structure"
+                  : det?.setupType === "hs" ? "Head & Shoulders structure"
+                  : det?.setupType === "rt" ? "Rounded Top structure"
+                  : "Cup & Handle structure"}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {radarData.map(({ metric, value }, idx) => (
@@ -4602,7 +5154,7 @@ export default function App() {
     const sectorPulse = hmData.find(d => d.ticker === selectedTicker)?.total ?? null;
     const tickerRows = (selectedTicker && rawData) ? (rawData.get(selectedTicker) || []) : [];
     const patternBarsFromEnd = selectedDetection
-      ? (tickerRows.length - 1 - (selectedDetection.setupType === "rhs"
+      ? (tickerRows.length - 1 - ((selectedDetection.setupType === "rhs" || selectedDetection.setupType === "hs")
           ? (selectedDetection.rightShoulderIdx ?? selectedDetection.rightRim ?? 0)
           : (selectedDetection.rightRim ?? 0)))
       : null;
@@ -4775,7 +5327,7 @@ export default function App() {
       <div style={S.header}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 0 }}>
           <span style={S.logo}>⌖ PatternPulse</span>
-          {!isMobile && <span style={S.logoSub}>by AlgoGradient · Cup &amp; Handle · Reverse H&amp;S</span>}
+          {!isMobile && <span style={S.logoSub}>by AlgoGradient · Cup &amp; Handle · Reverse H&amp;S · H&amp;S · Rounded Top</span>}
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
           {scanStatus === "done" && !isMobile && (
