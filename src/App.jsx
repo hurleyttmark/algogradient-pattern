@@ -4711,13 +4711,34 @@ export default function App() {
             display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 18, flexShrink: 0,
             background: COLORS.surface, flexDirection: isMobile ? "column" : "row"
           }}>
-            <div style={{ width: isMobile ? "100%" : 210, height: 190, flexShrink: 0, display: "flex", justifyContent: "center" }}>
-              <RadarChart width={210} height={190} data={radarData} outerRadius={58} margin={{ top: 10, right: 10, bottom: 10, left: 10 }}>
-                <PolarGrid stroke={COLORS.border} />
-                <PolarAngleAxis dataKey="metric" tick={{ fill: COLORS.textDim, fontSize: 10, fontWeight: 600 }} />
-                <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-                <Radar dataKey="value" stroke={COLORS.accent} fill={COLORS.accent} fillOpacity={0.28} />
-              </RadarChart>
+            <div style={{ width: isMobile ? "100%" : 210, height: isMobile ? 220 : 190, flexShrink: 0, display: "flex", justifyContent: "center" }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <RadarChart data={radarData} outerRadius={isMobile ? 62 : 58} margin={{ top: 18, right: 22, bottom: 18, left: 22 }}>
+                  <PolarGrid stroke={COLORS.border} />
+                  <PolarAngleAxis
+                    dataKey="metric"
+                    tick={(props) => {
+                      const { x, y, payload, cx, cy } = props;
+                      // Shorten labels on mobile to prevent clipping
+                      let label = payload.value;
+                      if (isMobile && label.length > 8) label = label.slice(0, 7) + "…";
+                      const dx = x - cx, dy = y - cy;
+                      const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+                      const anchor = Math.abs(angle) > 90 ? "end" : "start";
+                      // Top/bottom labels centered
+                      const textAnchor = Math.abs(dx) < 10 ? "middle" : anchor;
+                      return (
+                        <text x={x} y={y} textAnchor={textAnchor} dominantBaseline="middle"
+                          style={{ fill: COLORS.textDim, fontSize: isMobile ? 9 : 10, fontWeight: 600 }}>
+                          {label}
+                        </text>
+                      );
+                    }}
+                  />
+                  <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+                  <Radar dataKey="value" stroke={COLORS.accent} fill={COLORS.accent} fillOpacity={0.28} />
+                </RadarChart>
+              </ResponsiveContainer>
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".08em", color: COLORS.textDim, marginBottom: 8 }}>
@@ -4738,19 +4759,26 @@ export default function App() {
             </div>
           </div>
         )}
-        {/* Gradient view — show current gradient score as a clean stat, no radar */}
+        {/* Gradient view — show current momentum stats, works for all setup types */}
         {det && chartSubTab === "gradient" && (() => {
-          const gradVal = Math.round((det.gradConf ?? 0) * 100);
-          const momVal  = Math.round((det.recentMomentum ?? 0.5) * 100);
-          const brkVal  = Math.round((det.breakoutProx ?? 0) * 100);
-          const volVal  = Math.round(((det.radar?.volumeConf ?? det.volumeConf) ?? 0) * 100);
-          const pulseVal = Math.round((det.pulseBonus ?? 0) * 100);
+          const isHSFamily = det.setupType === "hs" || det.setupType === "rt";
+          // Pull from radar first (always populated), then direct fields as fallback
+          const gradVal  = Math.round(((det.radar?.gradConf ?? det.gradConf ?? 0)) * 100);
+          const momVal   = Math.round((det.recentMomentum ?? 0.5) * 100);
+          const brkVal   = Math.round((det.breakoutProx ?? det.radar?.breakoutProx ?? 0) * 100);
+          const volVal   = Math.round((det.radar?.volumeConf ?? det.volConf ?? det.volScore ?? 0) * 100);
+          // Pulse: cup/RT have pulseBonus; H&S/RHS use volSurge as the confirmation signal
+          const pulseVal = Math.round(((det.setupType === "hs" || det.setupType === "rhs")
+            ? (det.radar?.gradConf ?? det.volSurge ?? 0)
+            : (det.pulseBonus ?? det.radar?.pulseStr ?? 0)) * 100);
           const stats = [
-            { label: "Gradient Score", value: gradVal, desc: "20-bar momentum gradient — how cleanly price is trending" },
-            { label: "Recent Momentum", value: momVal, desc: "10-bar candle momentum (bull vs bear ratio)" },
-            { label: "Breakout Prox", value: brkVal, desc: "Closeness to breakout pivot level" },
-            { label: "Volume Conf", value: volVal, desc: "Volume expansion confirming the move" },
-            { label: "Pulse / Streak", value: pulseVal, desc: "Consecutive bullish candle streak bonus" },
+            { label: "Gradient",        value: gradVal, desc: "20-bar momentum gradient — how cleanly price is trending" },
+            { label: "Momentum (10d)",  value: momVal,  desc: "10-bar candle momentum (bull vs bear ratio)" },
+            { label: isHSFamily ? "Brkdn Prox" : "Breakout Prox",
+                                        value: brkVal,  desc: isHSFamily ? "Closeness to neckline breakdown level" : "Closeness to breakout pivot level" },
+            { label: "Volume",          value: volVal,  desc: "Volume confirmation signal" },
+            { label: isHSFamily ? "Vol Surge" : "Pulse / Streak",
+                                        value: pulseVal, desc: isHSFamily ? "Volume surge on breakdown" : "Consecutive bullish candle streak bonus" },
           ];
           return (
             <div style={{ borderTop: `1px solid ${COLORS.border}`, padding: "14px 16px", background: COLORS.surface, flexShrink: 0 }}>
