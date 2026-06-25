@@ -4837,9 +4837,9 @@ export default function App() {
             display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 18, flexShrink: 0,
             background: COLORS.surface, flexDirection: isMobile ? "column" : "row"
           }}>
-            <div style={{ width: isMobile ? "100%" : 210, height: isMobile ? 220 : 190, flexShrink: 0, display: "flex", justifyContent: "center" }}>
+            <div style={{ width: isMobile ? "100%" : 260, height: isMobile ? 220 : 210, flexShrink: 0, display: "flex", justifyContent: "center" }}>
               <ResponsiveContainer width="100%" height="100%">
-                <RadarChart data={radarData} outerRadius={isMobile ? 62 : 58} margin={{ top: 18, right: 22, bottom: 18, left: 22 }}>
+                <RadarChart data={radarData} outerRadius={isMobile ? 62 : 58} margin={{ top: 22, right: 28, bottom: 22, left: 52 }}>
                   <PolarGrid stroke={COLORS.border} />
                   <PolarAngleAxis
                     dataKey="metric"
@@ -5400,7 +5400,7 @@ export default function App() {
       : { label: `⏳ ${patternBarsFromEnd}b ago`, color: "#f87171" };
 
     return (
-      <div style={{ height: isMobile ? "auto" : "100%", minHeight: isMobile ? "85vh" : undefined, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden", background: "#0b0d11" }}>
+      <div style={{ height: isMobile ? "auto" : "100%", minHeight: isMobile ? "85vh" : undefined, display: "flex", flexDirection: "column", overflowY: isMobile ? "visible" : "auto", overflowX: "hidden", background: "#0b0d11" }}>
         <style>{`
 
         `}</style>
