@@ -3185,28 +3185,38 @@ export default function App() {
         "ABT","DHR","ADBE","NKE","TXN","NEE","PM","RTX","QCOM","HON",
         "AMGN","LOW","UPS","IBM","CAT","SPGI","GS","MS","BLK","INTU"];
 
-      // ── PHASE 1: fetch + scan 50 priority tickers instantly ──
+      // ── Attempt bulk load from server cache (single request) ──
       try {
-        setFetchPhase("Loading top tickers…");
-        setScanProgress(5);
+        setFetchPhase("Loading market data…");
+        setScanProgress(2);
 
-        const priRes = await fetch("https://algogradient.com/yahoo-priority.php");
-        if (!priRes.ok) throw new Error("Priority endpoint not available");
+        const res = await fetch("https://algogradient.com/yahoo-bulk.php");
+        if (!res.ok) throw new Error("Bulk endpoint not available");
 
+        setFetchPhase("Parsing data…");
+        setScanProgress(10);
+        const json = await res.json();
+        if (json.error) throw new Error(json.error);
+
+        // Parse all rows up front
         setScanProgress(15);
-        setFetchPhase("Scanning top tickers…");
-        const priJson = await priRes.json();
-        if (priJson.error) throw new Error(priJson.error);
-
-        const priorityMap = new Map();
-        for (const [ticker, rows] of Object.entries(priJson)) {
+        setFetchPhase("Preparing tickers…");
+        const allParsed = {};
+        for (const [ticker, rows] of Object.entries(json)) {
           const parsed = rows.map(r => ({ ...r, date: new Date(r.date) }));
-          if (parsed.length >= MIN_BARS) priorityMap.set(ticker, parsed);
+          if (parsed.length >= MIN_BARS) allParsed[ticker] = parsed;
         }
 
-        if (priorityMap.size === 0) throw new Error("No priority tickers");
+        const allTickers = Object.keys(allParsed);
+        if (allTickers.length === 0) throw new Error("No tickers in bulk response");
 
-        setRawData(priorityMap);
+        // ── PHASE 1: scan priority tickers immediately, show results fast ──
+        const priorityTickers = PRIORITY.filter(t => allParsed[t]);
+        const priorityMap = new Map(priorityTickers.map(t => [t, allParsed[t]]));
+
+        setScanProgress(18);
+        setFetchPhase(`Scanning top tickers…`);
+        setRawData(new Map(Object.entries(allParsed))); // full rawData for chart use
 
         const onBatch = (partial) => {
           setScores(partial);
@@ -3218,56 +3228,43 @@ export default function App() {
         };
 
         const priorityResults = await runScan(priorityMap, tolerance,
-          (p) => setScanProgress(15 + Math.round(p * 0.45)),
+          (p) => setScanProgress(18 + Math.round(p * 0.22)),
           cancelRef, windowMode, onBatch);
 
-        // App is now usable — show results immediately
-        if (!cancelRef.current) {
-          setAllScores(priorityResults.filter(r => r.score > 0));
-          setScores(priorityResults.filter(r => r.score > 0));
+        // Show priority results immediately — app is now usable
+        if (!cancelRef.current && priorityResults.length > 0) {
+          setAllScores(priorityResults);
+          setScores(priorityResults);
           setScanStatus("done");
-          setScanProgress(60);
+          setScanProgress(40);
           setFetchPhase("");
-          if (priorityResults.length > 0) {
-            setSelectedTicker(priorityResults[0].ticker);
-            setActiveTab("chart");
-          }
+          setSelectedTicker(priorityResults[0].ticker);
+          setActiveTab("chart");
         }
 
-        // ── PHASE 2: fetch + scan remaining tickers silently in background ──
-        if (!cancelRef.current) {
-          const bulkRes = await fetch("https://algogradient.com/yahoo-bulk.php");
-          if (bulkRes.ok) {
-            const bulkJson = await bulkRes.json();
-            const fullMap = new Map(priorityMap); // start with priority data
-            for (const [ticker, rows] of Object.entries(bulkJson)) {
-              if (priorityMap.has(ticker)) continue; // skip already scanned
-              const parsed = rows.map(r => ({ ...r, date: new Date(r.date) }));
-              if (parsed.length >= MIN_BARS) fullMap.set(ticker, parsed);
-            }
-            setRawData(fullMap);
+        // ── PHASE 2: scan remaining tickers silently in background ──
+        const remainingTickers = allTickers.filter(t => !priorityMap.has(t));
+        const remainingMap = new Map(remainingTickers.map(t => [t, allParsed[t]]));
 
-            const remainingMap = new Map([...fullMap].filter(([t]) => !priorityMap.has(t)));
-            if (remainingMap.size > 0 && !cancelRef.current) {
-              const bgResults = await runScan(remainingMap, tolerance,
-                (p) => setScanProgress(60 + Math.round(p * 0.4)),
-                cancelRef, windowMode);
+        if (remainingMap.size > 0 && !cancelRef.current) {
+          const bgResults = await runScan(remainingMap, tolerance,
+            (p) => setScanProgress(40 + Math.round(p * 0.6)),
+            cancelRef, windowMode);
 
-              if (!cancelRef.current) {
-                const merged = [...priorityResults, ...bgResults]
-                  .filter(r => (r.cup?.score > 0)||(r.rhs?.score > 0)||(r.hs?.score > 0)||(r.rt?.score > 0))
-                  .sort((a, b) => b.score - a.score);
-                setAllScores(merged);
-                setScores(merged);
-                setScanProgress(100);
-              }
-            }
+          if (!cancelRef.current) {
+            // Merge priority + background results and re-rank
+            const merged = [...priorityResults, ...bgResults]
+              .filter(r => (r.cup?.score > 0)||(r.rhs?.score > 0)||(r.hs?.score > 0)||(r.rt?.score > 0))
+              .sort((a, b) => b.score - a.score);
+            setAllScores(merged);
+            setScores(merged);
+            setScanProgress(100);
           }
         }
 
         return;
       } catch (_bulkErr) {
-        // Priority endpoint unavailable — fall back to bundled CSV
+        // Bulk endpoint unavailable — fall back to bundled CSV
       }
 
       // ── Fallback: bundled CSV ──
