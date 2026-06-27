@@ -3180,12 +3180,37 @@ export default function App() {
 
       // ── Attempt bulk load from server cache (single request) ──
       try {
-        setFetchPhase("Loading live market data…");
+        setFetchPhase("Connecting to market data…");
         const res = await fetch("https://algogradient.com/yahoo-bulk.php");
         if (!res.ok) throw new Error("Bulk endpoint not available");
 
+        // Stream download progress using Content-Length header
+        const contentLength = res.headers.get("Content-Length");
+        const total = contentLength ? parseInt(contentLength) : null;
+        const reader = res.body.getReader();
+        const chunks = [];
+        let received = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.length;
+          if (total) {
+            const pct = Math.round((received / total) * 35);
+            setScanProgress(pct);
+            setFetchPhase(`Downloading market data… ${Math.round(received/1024)}KB / ${Math.round(total/1024)}KB`);
+          } else {
+            setFetchPhase(`Downloading market data… ${Math.round(received/1024)}KB`);
+          }
+        }
+
         setFetchPhase("Parsing data…");
-        const json = await res.json();
+        setScanProgress(38);
+        const text = new TextDecoder().decode(
+          (() => { const merged = new Uint8Array(received); let offset = 0; chunks.forEach(c => { merged.set(c, offset); offset += c.length; }); return merged; })()
+        );
+        const json = JSON.parse(text);
         if (json.error) throw new Error(json.error);
 
         const dataMap = new Map();
