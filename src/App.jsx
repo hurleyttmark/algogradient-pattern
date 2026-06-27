@@ -3160,16 +3160,17 @@ export default function App() {
     "XOM","XYL","YUM","ZBH","ZBRA","ZTS"
   ];
 
+  // ── PHP proxy URL ──
+  const YAHOO_PROXY = "https://algogradient.com/yahoo-proxy.php";
+
   // ── Live fetch state ──
   const [fetchPhase, setFetchPhase] = useState(""); // status message during live fetch
 
-  // ── Fetch OHLCV for one ticker from Yahoo Finance (today → 5 years back) ──
+  // ── Fetch OHLCV for one ticker via PHP proxy (today → 5 years back) ──
   const fetchTickerYahoo = useCallback(async (ticker) => {
     const endTs   = Math.floor(Date.now() / 1000);
     const startTs = endTs - 5 * 365 * 24 * 3600;
-    // Yahoo Finance v8 chart endpoint — no API key required
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +
-      `?interval=1d&period1=${startTs}&period2=${endTs}&includePrePost=false`;
+    const url = `${YAHOO_PROXY}?ticker=${encodeURIComponent(ticker)}&period1=${startTs}&period2=${endTs}`;
     const res = await fetch(url);
     if (!res.ok) return null;
     const json = await res.json();
