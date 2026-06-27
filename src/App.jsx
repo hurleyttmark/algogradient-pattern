@@ -3165,32 +3165,9 @@ export default function App() {
   ];
 
   // ── Live fetch state ──
-  const [fetchPhase, setFetchPhase] = useState(""); // status message during live fetch
+  const [fetchPhase, setFetchPhase] = useState("");
 
-  // ── Fetch OHLCV for one ticker via PHP proxy (today → 5 years back) ──
-  const fetchTickerYahoo = useCallback(async (ticker) => {
-    const endTs   = Math.floor(Date.now() / 1000);
-    const startTs = endTs - 5 * 365 * 24 * 3600;
-    const url = `https://algogradient.com/yahoo-proxy.php?ticker=${encodeURIComponent(ticker)}&period1=${startTs}&period2=${endTs}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const json = await res.json();
-    const result = json?.chart?.result?.[0];
-    if (!result) return null;
-    const timestamps = result.timestamp;
-    const q = result.indicators?.quote?.[0];
-    if (!timestamps || !q) return null;
-    const rows = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i], v = q.volume?.[i];
-      if (o == null || h == null || l == null || c == null || v == null) continue;
-      if (isNaN(o) || isNaN(h) || isNaN(l) || isNaN(c)) continue;
-      rows.push({ date: new Date(timestamps[i] * 1000), open: o, high: h, low: l, close: c, volume: v });
-    }
-    return rows.length >= MIN_BARS ? rows : null;
-  }, []);
-
-  // ── Auto-load: try live Yahoo Finance first, fall back to bundled CSV ──
+  // ── Auto-load: try bulk cache endpoint first, then fallback to CSV ──
   useEffect(() => {
     const loadDefault = async () => {
       setScanStatus("scanning");
@@ -3201,43 +3178,45 @@ export default function App() {
       setSelectedTicker(null);
       cancelRef.current = false;
 
-      // ── Attempt live fetch ──
+      // High-value tickers to scan first so leaderboard populates immediately
+      const PRIORITY = ["AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","JPM","V","MA",
+        "UNH","XOM","LLY","JNJ","PG","HD","AVGO","MRK","COST","ABBV",
+        "CVX","BAC","KO","PEP","WMT","CRM","MCD","TMO","ACN","CSCO",
+        "ABT","DHR","ADBE","NKE","TXN","NEE","PM","RTX","QCOM","HON",
+        "AMGN","LOW","UPS","IBM","CAT","SPGI","GS","MS","BLK","INTU"];
+
+      // ── Attempt bulk load from server cache (single request) ──
       try {
-        setFetchPhase("Connecting to live market data…");
-        // Quick probe: fetch one ticker to see if Yahoo is reachable
-        const probeRows = await fetchTickerYahoo("AAPL");
-        if (!probeRows) throw new Error("Probe failed");
+        setFetchPhase("Loading market data…");
+        setScanProgress(2);
 
-        // Full batch fetch — 20 tickers at a time to avoid rate limits
-        const BATCH = 20;
-        const dataMap = new Map();
-        dataMap.set("AAPL", probeRows); // already have it
+        const res = await fetch("https://algogradient.com/yahoo-bulk.php");
+        if (!res.ok) throw new Error("Bulk endpoint not available");
 
-        const remaining = LIVE_TICKERS.filter(t => t !== "AAPL");
-        let done = 1;
+        setFetchPhase("Parsing data…");
+        setScanProgress(10);
+        const json = await res.json();
+        if (json.error) throw new Error(json.error);
 
-        for (let i = 0; i < remaining.length; i += BATCH) {
-          if (cancelRef.current) { setScanStatus("idle"); return; }
-          const batch = remaining.slice(i, i + BATCH);
-          const results = await Promise.allSettled(batch.map(t => fetchTickerYahoo(t)));
-          results.forEach((r, idx) => {
-            if (r.status === "fulfilled" && r.value) {
-              dataMap.set(batch[idx], r.value);
-            }
-          });
-          done += batch.length;
-          const pct = Math.round((done / LIVE_TICKERS.length) * 40); // fetch = first 40%
-          setScanProgress(pct);
-          setFetchPhase(`Fetching live data… ${done}/${LIVE_TICKERS.length} tickers`);
-          // Small throttle to avoid hammering Yahoo
-          await new Promise(res => setTimeout(res, 80));
+        // Parse all rows up front
+        setScanProgress(15);
+        setFetchPhase("Preparing tickers…");
+        const allParsed = {};
+        for (const [ticker, rows] of Object.entries(json)) {
+          const parsed = rows.map(r => ({ ...r, date: new Date(r.date) }));
+          if (parsed.length >= MIN_BARS) allParsed[ticker] = parsed;
         }
 
-        if (dataMap.size === 0) throw new Error("No tickers returned data");
+        const allTickers = Object.keys(allParsed);
+        if (allTickers.length === 0) throw new Error("No tickers in bulk response");
 
-        setFetchPhase("Running pattern scan…");
-        setRawData(dataMap);
-        setParseWarnings([]);
+        // ── PHASE 1: scan priority tickers immediately, show results fast ──
+        const priorityTickers = PRIORITY.filter(t => allParsed[t]);
+        const priorityMap = new Map(priorityTickers.map(t => [t, allParsed[t]]));
+
+        setScanProgress(18);
+        setFetchPhase(`Scanning top tickers…`);
+        setRawData(new Map(Object.entries(allParsed))); // full rawData for chart use
 
         const onBatch = (partial) => {
           setScores(partial);
@@ -3247,21 +3226,45 @@ export default function App() {
             setActiveTab(prev => prev === "leaderboard" ? "chart" : prev);
           }
         };
-        const results = await runScan(dataMap, tolerance, (p) => setScanProgress(40 + Math.round(p * 0.6)), cancelRef, windowMode, onBatch);
-        if (!cancelRef.current) {
-          setAllScores(results);
-          setScores(results);
+
+        const priorityResults = await runScan(priorityMap, tolerance,
+          (p) => setScanProgress(18 + Math.round(p * 0.22)),
+          cancelRef, windowMode, onBatch);
+
+        // Show priority results immediately — app is now usable
+        if (!cancelRef.current && priorityResults.length > 0) {
+          setAllScores(priorityResults);
+          setScores(priorityResults);
           setScanStatus("done");
-          setScanProgress(100);
+          setScanProgress(40);
           setFetchPhase("");
-          if (results.length > 0) {
-            setSelectedTicker(results[0].ticker);
-            setActiveTab("chart");
+          setSelectedTicker(priorityResults[0].ticker);
+          setActiveTab("chart");
+        }
+
+        // ── PHASE 2: scan remaining tickers silently in background ──
+        const remainingTickers = allTickers.filter(t => !priorityMap.has(t));
+        const remainingMap = new Map(remainingTickers.map(t => [t, allParsed[t]]));
+
+        if (remainingMap.size > 0 && !cancelRef.current) {
+          const bgResults = await runScan(remainingMap, tolerance,
+            (p) => setScanProgress(40 + Math.round(p * 0.6)),
+            cancelRef, windowMode);
+
+          if (!cancelRef.current) {
+            // Merge priority + background results and re-rank
+            const merged = [...priorityResults, ...bgResults]
+              .filter(r => (r.cup?.score > 0)||(r.rhs?.score > 0)||(r.hs?.score > 0)||(r.rt?.score > 0))
+              .sort((a, b) => b.score - a.score);
+            setAllScores(merged);
+            setScores(merged);
+            setScanProgress(100);
           }
         }
-        return; // success — skip CSV fallback
-      } catch (_liveErr) {
-        // Live fetch failed — fall back to bundled CSV
+
+        return;
+      } catch (_bulkErr) {
+        // Bulk endpoint unavailable — fall back to bundled CSV
       }
 
       // ── Fallback: bundled CSV ──
