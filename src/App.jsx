@@ -3121,18 +3121,142 @@ export default function App() {
     setSelectedDomainNode(null);
   }, [selectedTicker]);
 
-  // ── Auto-load bundled default CSV on startup ──
+  // ── Live ticker list (same set as original CSV) ──
+  const LIVE_TICKERS = [
+    "A","AAPL","ABBV","ABNB","ABT","ACGL","ACN","ADBE","ADI","ADM","ADP","ADSK","AEE","AEP","AES",
+    "AFL","AIG","AIZ","AJG","AKAM","ALB","ALGN","ALL","ALLE","AMAT","AMCR","AMD","AME","AMGN","AMP",
+    "AMT","AMZN","ANET","AON","AOS","APA","APD","APH","APO","APP","APTV","ARE","ARES","ATO","AVB",
+    "AVGO","AVY","AWK","AXON","AXP","AZO","BA","BAC","BALL","BAX","BBY","BDX","BEN","BG","BIIB",
+    "BK","BKNG","BKR","BLDR","BLK","BMY","BR","BRK-B","BRO","BSX","BX","BXP","C","CAG","CAH",
+    "CARR","CAT","CB","CBOE","CBRE","CCI","CCL","CDNS","CDW","CEG","CF","CFG","CHD","CHRW","CHTR",
+    "CI","CINF","CL","CLX","CMCSA","CME","CMG","CMI","CMS","CNC","CNP","COF","COIN","COO","COP",
+    "COR","COST","CPAY","CPB","CPRT","CPT","CRL","CRM","CRWD","CSCO","CSGP","CSX","CTAS","CTRA",
+    "CTSH","CTVA","CVS","CVX","D","DAL","DASH","DD","DDOG","DE","DECK","DELL","DG","DGX","DHI",
+    "DHR","DIS","DKNG","DLR","DLTR","DOC","DOV","DOW","DPZ","DRI","DTE","DUK","DVA","DVN","DXCM",
+    "EA","EBAY","ECL","ED","EFX","EG","EIX","EL","ELV","EME","EMR","ENPH","EOG","EPAM","EQIX",
+    "EQR","EQT","ERIE","ES","ESS","ETN","ETR","EVRG","EW","EXC","EXE","EXPD","EXPE","EXR","F",
+    "FANG","FAST","FCX","FDS","FDX","FE","FFIV","FICO","FIS","FISV","FITB","FOX","FOXA","FRT",
+    "FSLR","FTNT","FTV","GD","GDDY","GE","GEHC","GEN","GEV","GILD","GIS","GL","GLD","GLW","GM",
+    "GNRC","GOOG","GOOGL","GPC","GPN","GRMN","GS","GWW","HAL","HAS","HBAN","HCA","HD","HIG","HII",
+    "HIMS","HLT","HON","HOOD","HPE","HPQ","HRL","HSIC","HST","HSY","HUBB","HUM","HWM","IBKR","IBM",
+    "ICE","IDXX","IEX","IFF","INCY","INTC","INTU","INVH","IP","IQV","IR","IRM","ISRG","IT","ITW",
+    "IVZ","J","JBHT","JBL","JCI","JKHY","JNJ","JPM","KDP","KEY","KEYS","KHC","KIM","KKR","KLAC",
+    "KMB","KMI","KO","KR","KVUE","L","LCID","LDOS","LEN","LH","LHX","LII","LIN","LKQ","LLY","LMT",
+    "LNT","LOW","LRCX","LULU","LUV","LVS","LW","LYB","LYV","MA","MAA","MAR","MARA","MAS","MCD",
+    "MCHP","MCK","MCO","MDLZ","MDT","MET","META","MGM","MHK","MKC","MLM","MMM","MNST","MO","MOH",
+    "MOS","MP","MPC","MPWR","MRK","MRNA","MS","MSCI","MSFT","MSI","MSTR","MTB","MTCH","MTD","MU",
+    "NCLH","NDAQ","NDSN","NEE","NEM","NFLX","NI","NIO","NKE","NOC","NOW","NRG","NSC","NTAP","NTRS",
+    "NUE","NVDA","NVO","NVR","NWS","NWSA","NXPI","O","ODFL","OKE","OMC","ON","ORCL","ORLY","OTIS",
+    "OXY","PANW","PAYC","PAYX","PCAR","PCG","PEG","PEP","PFE","PFG","PG","PGR","PH","PHM","PKG",
+    "PLD","PLTR","PM","PNC","PNR","PNW","PODD","POOL","PPG","PPL","PRU","PSA","PSX","PTC","PWR",
+    "PYPL","Q","QCOM","RCL","REG","REGN","RF","RIOT","RIVN","RJF","RKLB","RL","RMD","ROK","ROL",
+    "ROP","ROST","RSG","RTX","RVTY","SBAC","SBUX","SCHW","SHOP","SHW","SJM","SLB","SLV","SMCI",
+    "SNA","SNPS","SO","SOFI","SOLV","SPG","SPGI","SRE","STE","STLD","STT","STX","STZ","SW","SWK",
+    "SWKS","SYF","SYK","SYM","SYY","T","TAP","TDG","TDY","TECH","TEL","TER","TFC","TGT","TJX",
+    "TKO","TMO","TMUS","TPL","TPR","TRGP","TRMB","TROW","TRV","TSCO","TSLA","TSN","TT","TTD",
+    "TTWO","TXN","TXT","TYL","UAL","UBER","UDR","UHS","ULTA","UNH","UNP","UPS","URI","USB","V",
+    "VICI","VLO","VLTO","VMC","VRSK","VRSN","VRTX","VST","VTR","VTRS","VZ","WAB","WAT","WBD",
+    "WDAY","WDC","WEC","WELL","WFC","WM","WMB","WMT","WRB","WSM","WST","WTW","WY","WYNN","XEL",
+    "XOM","XYL","YUM","ZBH","ZBRA","ZTS"
+  ];
+
+  // ── Live fetch state ──
+  const [fetchPhase, setFetchPhase] = useState(""); // status message during live fetch
+
+  // ── Fetch OHLCV for one ticker from Yahoo Finance (today → 5 years back) ──
+  const fetchTickerYahoo = useCallback(async (ticker) => {
+    const endTs   = Math.floor(Date.now() / 1000);
+    const startTs = endTs - 5 * 365 * 24 * 3600;
+    // Yahoo Finance v8 chart endpoint — no API key required
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}` +
+      `?interval=1d&period1=${startTs}&period2=${endTs}&includePrePost=false`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const json = await res.json();
+    const result = json?.chart?.result?.[0];
+    if (!result) return null;
+    const timestamps = result.timestamp;
+    const q = result.indicators?.quote?.[0];
+    if (!timestamps || !q) return null;
+    const rows = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i], v = q.volume?.[i];
+      if (o == null || h == null || l == null || c == null || v == null) continue;
+      if (isNaN(o) || isNaN(h) || isNaN(l) || isNaN(c)) continue;
+      rows.push({ date: new Date(timestamps[i] * 1000), open: o, high: h, low: l, close: c, volume: v });
+    }
+    return rows.length >= MIN_BARS ? rows : null;
+  }, []);
+
+  // ── Auto-load: try live Yahoo Finance first, fall back to bundled CSV ──
   useEffect(() => {
     const loadDefault = async () => {
-      try {
-        setScanStatus("scanning");
-        setScanError(null);
-        setScanProgress(0);
-        setScores([]);
-        setAllScores([]);
-        setSelectedTicker(null);
-        cancelRef.current = false;
+      setScanStatus("scanning");
+      setScanError(null);
+      setScanProgress(0);
+      setScores([]);
+      setAllScores([]);
+      setSelectedTicker(null);
+      cancelRef.current = false;
 
+      // ── Attempt live fetch ──
+      try {
+        setFetchPhase("Connecting to live market data…");
+        // Quick probe: fetch one ticker to see if Yahoo is reachable
+        const probeRows = await fetchTickerYahoo("AAPL");
+        if (!probeRows) throw new Error("Probe failed");
+
+        // Full batch fetch — 20 tickers at a time to avoid rate limits
+        const BATCH = 20;
+        const dataMap = new Map();
+        dataMap.set("AAPL", probeRows); // already have it
+
+        const remaining = LIVE_TICKERS.filter(t => t !== "AAPL");
+        let done = 1;
+
+        for (let i = 0; i < remaining.length; i += BATCH) {
+          if (cancelRef.current) { setScanStatus("idle"); return; }
+          const batch = remaining.slice(i, i + BATCH);
+          const results = await Promise.allSettled(batch.map(t => fetchTickerYahoo(t)));
+          results.forEach((r, idx) => {
+            if (r.status === "fulfilled" && r.value) {
+              dataMap.set(batch[idx], r.value);
+            }
+          });
+          done += batch.length;
+          const pct = Math.round((done / LIVE_TICKERS.length) * 40); // fetch = first 40%
+          setScanProgress(pct);
+          setFetchPhase(`Fetching live data… ${done}/${LIVE_TICKERS.length} tickers`);
+          // Small throttle to avoid hammering Yahoo
+          await new Promise(res => setTimeout(res, 80));
+        }
+
+        if (dataMap.size === 0) throw new Error("No tickers returned data");
+
+        setFetchPhase("Running pattern scan…");
+        setRawData(dataMap);
+        setParseWarnings([]);
+
+        const results = await runScan(dataMap, tolerance, (p) => setScanProgress(40 + Math.round(p * 0.6)), cancelRef, windowMode);
+        if (!cancelRef.current) {
+          setAllScores(results);
+          setScores(results);
+          setScanStatus("done");
+          setScanProgress(100);
+          setFetchPhase("");
+          if (results.length > 0) {
+            setSelectedTicker(results[0].ticker);
+            setActiveTab("chart");
+          }
+        }
+        return; // success — skip CSV fallback
+      } catch (_liveErr) {
+        // Live fetch failed — fall back to bundled CSV
+      }
+
+      // ── Fallback: bundled CSV ──
+      try {
+        setFetchPhase("Live data unavailable — loading bundled dataset…");
         const res = await fetch("/ohlcv_data_fixed.csv");
         if (!res.ok) throw new Error("Default data not found");
 
@@ -3143,10 +3267,11 @@ export default function App() {
         const parsed = await parseCSV(file);
         setRawData(parsed.map);
         setParseWarnings(parsed.warnings);
+        setFetchPhase("");
 
         if (parsed.map.size === 0) {
           setScanStatus("error");
-          setScanError("Default data loaded but no valid tickers found.");
+          setScanError("Bundled data loaded but no valid tickers found.");
           return;
         }
 
@@ -3162,9 +3287,9 @@ export default function App() {
           }
         }
       } catch (err) {
-        // Silently fall back to manual upload if default data fails
         setScanStatus("idle");
         setScanError(null);
+        setFetchPhase("");
       }
     };
     loadDefault();
@@ -3812,13 +3937,22 @@ export default function App() {
   const renderUpload = () => (
     <div style={S.card}>
       <div style={S.sectionTitle}>Data Source</div>
+      {scanStatus === "scanning" && fetchPhase && (
+        <div style={{
+          padding: "8px 12px", borderRadius: 8, marginBottom: 10,
+          background: "rgba(108,143,255,0.1)", border: "1px solid rgba(108,143,255,0.3)",
+          fontSize: 11, color: COLORS.accent, lineHeight: 1.5
+        }}>
+          ⟳ {fetchPhase}
+        </div>
+      )}
       {(scanStatus === "idle" || scanStatus === "done") && rawData && (
         <div style={{
           padding: "8px 12px", borderRadius: 8, marginBottom: 10,
           background: "rgba(38,166,154,0.1)", border: "1px solid rgba(38,166,154,0.3)",
           fontSize: 11, color: COLORS.green, lineHeight: 1.5
         }}>
-          ✓ Default dataset loaded ({rawData.size} tickers)
+          ✓ Live data loaded — today − 5 yrs ({rawData.size} tickers)
         </div>
       )}
       <label
