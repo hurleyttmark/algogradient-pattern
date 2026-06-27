@@ -1821,7 +1821,7 @@ function parseCSV(file) {
 
 // ─── Scan Engine ─────────────────────────────────────────────────────────────
 
-async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto") {
+async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto", onBatch = null) {
   const tickers = [...dataMap.keys()];
   const results = [];
   const total = tickers.length;
@@ -1835,18 +1835,15 @@ async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto")
       if (cancelRef.current) break;
       const ohlcv = dataMap.get(ticker);
       try {
-        // Detect ALL setups so the UI can toggle without re-scanning
         const { cup, rhs, hs, rt } = detectAllSetups(ohlcv, tol, windowMode);
         const active = activeSetup === "rhs" ? rhs : activeSetup === "hs" ? hs : activeSetup === "rt" ? rt : cup;
         results.push({
           ticker, bars: ohlcv.length,
-          // Top-level mirrors the ACTIVE setup (keeps leaderboard code working)
           score: active.score,
           detection: active.detection,
           forming: active.forming || null,
           barsFromEnd: active.barsFromEnd,
           window: active.window,
-          // All setups stored for toggling
           cup, rhs, hs, rt,
         });
       } catch {
@@ -1855,11 +1852,18 @@ async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto")
     }
 
     onProgress(Math.min(99, Math.round(((i + BATCH_SIZE) / total) * 100)));
+
+    // Stream partial results to UI after each batch
+    if (onBatch) {
+      const partial = results
+        .filter(r => (r.cup?.score > 0) || (r.rhs?.score > 0) || (r.hs?.score > 0) || (r.rt?.score > 0))
+        .sort((a, b) => b.score - a.score);
+      onBatch(partial);
+    }
+
     await new Promise(r => setTimeout(r, 0));
   }
 
-  // Keep tickers that matched EITHER setup (so toggling has candidates),
-  // ranked by the active setup's score.
   return results
     .filter(r => (r.cup?.score > 0) || (r.rhs?.score > 0) || (r.hs?.score > 0) || (r.rt?.score > 0))
     .sort((a, b) => b.score - a.score);
@@ -3197,7 +3201,18 @@ export default function App() {
         setRawData(dataMap);
         setParseWarnings([]);
 
-        const results = await runScan(dataMap, tolerance, (p) => setScanProgress(40 + Math.round(p * 0.6)), cancelRef, windowMode);
+        // Stream partial results to leaderboard as each batch finishes
+        const onBatch = (partial) => {
+          setScores(partial);
+          setAllScores(partial);
+          // Auto-select top ticker on first batch so chart shows immediately
+          if (partial.length > 0) {
+            setSelectedTicker(prev => prev || partial[0].ticker);
+            setActiveTab(prev => prev === "leaderboard" ? "chart" : prev);
+          }
+        };
+
+        const results = await runScan(dataMap, tolerance, (p) => setScanProgress(40 + Math.round(p * 0.6)), cancelRef, windowMode, onBatch);
         if (!cancelRef.current) {
           setAllScores(results);
           setScores(results);
