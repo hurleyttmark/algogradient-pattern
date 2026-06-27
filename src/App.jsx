@@ -3178,66 +3178,90 @@ export default function App() {
       setSelectedTicker(null);
       cancelRef.current = false;
 
-      // Start progress animation immediately so bar moves from the very first second
-      setFetchPhase("Downloading market data…");
-      let fakeProgress = 0;
-      const progressTimer = setInterval(() => {
-        fakeProgress = Math.min(34, fakeProgress + (34 - fakeProgress) * 0.08);
-        setScanProgress(Math.round(fakeProgress));
-      }, 300);
+      // High-value tickers to scan first so leaderboard populates immediately
+      const PRIORITY = ["AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","JPM","V","MA",
+        "UNH","XOM","LLY","JNJ","PG","HD","AVGO","MRK","COST","ABBV",
+        "CVX","BAC","KO","PEP","WMT","CRM","MCD","TMO","ACN","CSCO",
+        "ABT","DHR","ADBE","NKE","TXN","NEE","PM","RTX","QCOM","HON",
+        "AMGN","LOW","UPS","IBM","CAT","SPGI","GS","MS","BLK","INTU"];
 
       // ── Attempt bulk load from server cache (single request) ──
       try {
-        let json;
-        try {
-          const res = await fetch("https://algogradient.com/yahoo-bulk.php");
-          clearInterval(progressTimer);
-          if (!res.ok) throw new Error("Bulk endpoint not available");
-          setFetchPhase("Parsing data…");
-          setScanProgress(37);
-          json = await res.json();
-        } catch (e) {
-          clearInterval(progressTimer);
-          throw e;
-        }
+        setFetchPhase("Loading market data…");
+        setScanProgress(2);
+
+        const res = await fetch("https://algogradient.com/yahoo-bulk.php");
+        if (!res.ok) throw new Error("Bulk endpoint not available");
+
+        setFetchPhase("Parsing data…");
+        setScanProgress(10);
+        const json = await res.json();
         if (json.error) throw new Error(json.error);
 
-        const dataMap = new Map();
+        // Parse all rows up front
+        setScanProgress(15);
+        setFetchPhase("Preparing tickers…");
+        const allParsed = {};
         for (const [ticker, rows] of Object.entries(json)) {
           const parsed = rows.map(r => ({ ...r, date: new Date(r.date) }));
-          if (parsed.length >= MIN_BARS) dataMap.set(ticker, parsed);
+          if (parsed.length >= MIN_BARS) allParsed[ticker] = parsed;
         }
 
-        if (dataMap.size === 0) throw new Error("No tickers in bulk response");
+        const allTickers = Object.keys(allParsed);
+        if (allTickers.length === 0) throw new Error("No tickers in bulk response");
 
-        setScanProgress(40);
-        setFetchPhase("Running pattern scan…");
-        setRawData(dataMap);
-        setParseWarnings([]);
+        // ── PHASE 1: scan priority tickers immediately, show results fast ──
+        const priorityTickers = PRIORITY.filter(t => allParsed[t]);
+        const priorityMap = new Map(priorityTickers.map(t => [t, allParsed[t]]));
 
-        // Stream partial results to leaderboard as each batch finishes
+        setScanProgress(18);
+        setFetchPhase(`Scanning top tickers…`);
+        setRawData(new Map(Object.entries(allParsed))); // full rawData for chart use
+
         const onBatch = (partial) => {
           setScores(partial);
           setAllScores(partial);
-          // Auto-select top ticker on first batch so chart shows immediately
           if (partial.length > 0) {
             setSelectedTicker(prev => prev || partial[0].ticker);
             setActiveTab(prev => prev === "leaderboard" ? "chart" : prev);
           }
         };
 
-        const results = await runScan(dataMap, tolerance, (p) => setScanProgress(40 + Math.round(p * 0.6)), cancelRef, windowMode, onBatch);
-        if (!cancelRef.current) {
-          setAllScores(results);
-          setScores(results);
+        const priorityResults = await runScan(priorityMap, tolerance,
+          (p) => setScanProgress(18 + Math.round(p * 0.22)),
+          cancelRef, windowMode, onBatch);
+
+        // Show priority results immediately — app is now usable
+        if (!cancelRef.current && priorityResults.length > 0) {
+          setAllScores(priorityResults);
+          setScores(priorityResults);
           setScanStatus("done");
-          setScanProgress(100);
+          setScanProgress(40);
           setFetchPhase("");
-          if (results.length > 0) {
-            setSelectedTicker(results[0].ticker);
-            setActiveTab("chart");
+          setSelectedTicker(priorityResults[0].ticker);
+          setActiveTab("chart");
+        }
+
+        // ── PHASE 2: scan remaining tickers silently in background ──
+        const remainingTickers = allTickers.filter(t => !priorityMap.has(t));
+        const remainingMap = new Map(remainingTickers.map(t => [t, allParsed[t]]));
+
+        if (remainingMap.size > 0 && !cancelRef.current) {
+          const bgResults = await runScan(remainingMap, tolerance,
+            (p) => setScanProgress(40 + Math.round(p * 0.6)),
+            cancelRef, windowMode);
+
+          if (!cancelRef.current) {
+            // Merge priority + background results and re-rank
+            const merged = [...priorityResults, ...bgResults]
+              .filter(r => (r.cup?.score > 0)||(r.rhs?.score > 0)||(r.hs?.score > 0)||(r.rt?.score > 0))
+              .sort((a, b) => b.score - a.score);
+            setAllScores(merged);
+            setScores(merged);
+            setScanProgress(100);
           }
         }
+
         return;
       } catch (_bulkErr) {
         // Bulk endpoint unavailable — fall back to bundled CSV
