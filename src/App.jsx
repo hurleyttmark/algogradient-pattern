@@ -3160,36 +3160,10 @@ export default function App() {
     "XOM","XYL","YUM","ZBH","ZBRA","ZTS"
   ];
 
-  // ── PHP proxy URL ──
-  const YAHOO_PROXY = "https://algogradient.com/yahoo-proxy.php";
-
   // ── Live fetch state ──
-  const [fetchPhase, setFetchPhase] = useState(""); // status message during live fetch
+  const [fetchPhase, setFetchPhase] = useState("");
 
-  // ── Fetch OHLCV for one ticker via PHP proxy (today → 5 years back) ──
-  const fetchTickerYahoo = useCallback(async (ticker) => {
-    const endTs   = Math.floor(Date.now() / 1000);
-    const startTs = endTs - 5 * 365 * 24 * 3600;
-    const url = `${YAHOO_PROXY}?ticker=${encodeURIComponent(ticker)}&period1=${startTs}&period2=${endTs}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const json = await res.json();
-    const result = json?.chart?.result?.[0];
-    if (!result) return null;
-    const timestamps = result.timestamp;
-    const q = result.indicators?.quote?.[0];
-    if (!timestamps || !q) return null;
-    const rows = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      const o = q.open?.[i], h = q.high?.[i], l = q.low?.[i], c = q.close?.[i], v = q.volume?.[i];
-      if (o == null || h == null || l == null || c == null || v == null) continue;
-      if (isNaN(o) || isNaN(h) || isNaN(l) || isNaN(c)) continue;
-      rows.push({ date: new Date(timestamps[i] * 1000), open: o, high: h, low: l, close: c, volume: v });
-    }
-    return rows.length >= MIN_BARS ? rows : null;
-  }, []);
-
-  // ── Auto-load: try live Yahoo Finance first, fall back to bundled CSV ──
+  // ── Auto-load: try bulk cache endpoint first, then fallback to CSV ──
   useEffect(() => {
     const loadDefault = async () => {
       setScanStatus("scanning");
@@ -3200,40 +3174,25 @@ export default function App() {
       setSelectedTicker(null);
       cancelRef.current = false;
 
-      // ── Attempt live fetch ──
+      // ── Attempt bulk load from server cache (single request) ──
       try {
-        setFetchPhase("Connecting to live market data…");
-        // Quick probe: fetch one ticker to see if Yahoo is reachable
-        const probeRows = await fetchTickerYahoo("AAPL");
-        if (!probeRows) throw new Error("Probe failed");
+        setFetchPhase("Loading live market data…");
+        const res = await fetch("https://algogradient.com/yahoo-bulk.php");
+        if (!res.ok) throw new Error("Bulk endpoint not available");
 
-        // Full batch fetch — 20 tickers at a time to avoid rate limits
-        const BATCH = 20;
+        setFetchPhase("Parsing data…");
+        const json = await res.json();
+        if (json.error) throw new Error(json.error);
+
         const dataMap = new Map();
-        dataMap.set("AAPL", probeRows); // already have it
-
-        const remaining = LIVE_TICKERS.filter(t => t !== "AAPL");
-        let done = 1;
-
-        for (let i = 0; i < remaining.length; i += BATCH) {
-          if (cancelRef.current) { setScanStatus("idle"); return; }
-          const batch = remaining.slice(i, i + BATCH);
-          const results = await Promise.allSettled(batch.map(t => fetchTickerYahoo(t)));
-          results.forEach((r, idx) => {
-            if (r.status === "fulfilled" && r.value) {
-              dataMap.set(batch[idx], r.value);
-            }
-          });
-          done += batch.length;
-          const pct = Math.round((done / LIVE_TICKERS.length) * 40); // fetch = first 40%
-          setScanProgress(pct);
-          setFetchPhase(`Fetching live data… ${done}/${LIVE_TICKERS.length} tickers`);
-          // Small throttle to avoid hammering Yahoo
-          await new Promise(res => setTimeout(res, 80));
+        for (const [ticker, rows] of Object.entries(json)) {
+          const parsed = rows.map(r => ({ ...r, date: new Date(r.date) }));
+          if (parsed.length >= MIN_BARS) dataMap.set(ticker, parsed);
         }
 
-        if (dataMap.size === 0) throw new Error("No tickers returned data");
+        if (dataMap.size === 0) throw new Error("No tickers in bulk response");
 
+        setScanProgress(40);
         setFetchPhase("Running pattern scan…");
         setRawData(dataMap);
         setParseWarnings([]);
@@ -3250,9 +3209,9 @@ export default function App() {
             setActiveTab("chart");
           }
         }
-        return; // success — skip CSV fallback
-      } catch (_liveErr) {
-        // Live fetch failed — fall back to bundled CSV
+        return;
+      } catch (_bulkErr) {
+        // Bulk endpoint unavailable — fall back to bundled CSV
       }
 
       // ── Fallback: bundled CSV ──
