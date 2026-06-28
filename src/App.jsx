@@ -1012,10 +1012,14 @@ function detectReverseHS(ohlcv, tol) {
         const distToTrigger = (triggerLevel - refClose) / (headHeight);
         const breakoutProx = breakoutCleared ? 1.0 : Math.max(0, 1 - Math.max(0, distToTrigger) / 0.5);
 
-        // Breakout volume surge
+        // Breakout volume surge — spec: ≥1.3× the 20-day average volume,
+        // confirming renewed institutional buying interest on the breakout.
         const v0 = volumes[breakoutBar] || 0, v1 = volumes[breakoutBar - 1] || 0, v2 = volumes[breakoutBar - 2] || 0;
         const breakVol = (v0 + v1 + v2) / 3;
-        const volSurge = Math.max(0, Math.min(1, (breakVol / avgVolAll - 1) / 0.5));
+        const vol20StartR = Math.max(0, breakoutBar - 20);
+        const vol20SliceR = volumes.slice(vol20StartR, breakoutBar);
+        const avgVol20R = vol20SliceR.length ? vol20SliceR.reduce((a, b) => a + b, 0) / vol20SliceR.length : avgVolAll;
+        const volSurge = Math.max(0, Math.min(1, (breakVol / avgVol20R - 1.0) / 0.3));
 
         // ── Build the idealized U-V-U ghost and score price's area-fit to it
         //    (same concept as the cup: too much area above/below the ideal = low) ──
@@ -1036,22 +1040,20 @@ function detectReverseHS(ohlcv, tol) {
         );
 
         // ── Shoulder prominence: how defined are the shoulders ──
-        // A real shoulder has a clear low that is noticeably below the neckline.
-        // Shoulder prominence = how far each shoulder dips below its neckline point
-        // as a fraction of head depth. Ideal: 20–50% of head depth.
-        // Too shallow (<10%) = barely a dip, not a real shoulder.
-        // Too deep (>70%) = shoulder approaches head depth, poor separation.
+        // Spec: shoulder depth (below neckline) should reach 75–95% of head
+        // depth (below neckline) — shoulders nearly as deep as the head,
+        // clearly distinguishable but still shallower than the head itself.
         const leftShProminence  = (necklineAt(leftSh)  - leftShPrice)  / headHeight;
         const rightShProminence = (necklineAt(rightSh) - rightShPrice) / headHeight;
         const avgShProminence   = (leftShProminence + rightShProminence) / 2;
-        // Hard gate: both shoulders must dip at least 10% of head depth
-        if (leftShProminence < 0.10 || rightShProminence < 0.10) continue;
-        // Score: ideal 20–50%, reward clear shoulders, penalize too shallow or too deep
-        const shoulderProminenceScore = avgShProminence >= 0.20 && avgShProminence <= 0.55
+        // Hard gate: well below the ideal floor = shoulders too shallow relative to head
+        if (avgShProminence < 0.75 * 0.6) continue;
+        // Score: ideal 75–95% of head depth (spec), penalize too shallow or too deep
+        const shoulderProminenceScore = avgShProminence >= 0.75 && avgShProminence <= 0.95
           ? 1.0
-          : avgShProminence < 0.20
-            ? avgShProminence / 0.20
-            : Math.max(0, 1 - (avgShProminence - 0.55) / 0.25);
+          : avgShProminence < 0.75
+            ? avgShProminence / 0.75
+            : Math.max(0, 1 - (avgShProminence - 0.95) / 0.30);
         // Shoulder symmetry in prominence (both dip roughly equally)
         const prominenceSym = leftShProminence > 0 && rightShProminence > 0
           ? Math.min(leftShProminence, rightShProminence) / Math.max(leftShProminence, rightShProminence)
@@ -1821,7 +1823,7 @@ function parseCSV(file) {
 
 // ─── Scan Engine ─────────────────────────────────────────────────────────────
 
-async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto", onBatch = null) {
+async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto") {
   const tickers = [...dataMap.keys()];
   const results = [];
   const total = tickers.length;
@@ -1835,15 +1837,18 @@ async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto",
       if (cancelRef.current) break;
       const ohlcv = dataMap.get(ticker);
       try {
+        // Detect ALL setups so the UI can toggle without re-scanning
         const { cup, rhs, hs, rt } = detectAllSetups(ohlcv, tol, windowMode);
         const active = activeSetup === "rhs" ? rhs : activeSetup === "hs" ? hs : activeSetup === "rt" ? rt : cup;
         results.push({
           ticker, bars: ohlcv.length,
+          // Top-level mirrors the ACTIVE setup (keeps leaderboard code working)
           score: active.score,
           detection: active.detection,
           forming: active.forming || null,
           barsFromEnd: active.barsFromEnd,
           window: active.window,
+          // All setups stored for toggling
           cup, rhs, hs, rt,
         });
       } catch {
@@ -1852,18 +1857,11 @@ async function runScan(dataMap, tol, onProgress, cancelRef, windowMode = "auto",
     }
 
     onProgress(Math.min(99, Math.round(((i + BATCH_SIZE) / total) * 100)));
-
-    // Stream partial results to UI after each batch
-    if (onBatch) {
-      const partial = results
-        .filter(r => (r.cup?.score > 0) || (r.rhs?.score > 0) || (r.hs?.score > 0) || (r.rt?.score > 0))
-        .sort((a, b) => b.score - a.score);
-      onBatch(partial);
-    }
-
     await new Promise(r => setTimeout(r, 0));
   }
 
+  // Keep tickers that matched EITHER setup (so toggling has candidates),
+  // ranked by the active setup's score.
   return results
     .filter(r => (r.cup?.score > 0) || (r.rhs?.score > 0) || (r.hs?.score > 0) || (r.rt?.score > 0))
     .sort((a, b) => b.score - a.score);
@@ -3125,151 +3123,18 @@ export default function App() {
     setSelectedDomainNode(null);
   }, [selectedTicker]);
 
-  // ── Live ticker list (same set as original CSV) ──
-  const LIVE_TICKERS = [
-    "A","AAPL","ABBV","ABNB","ABT","ACGL","ACN","ADBE","ADI","ADM","ADP","ADSK","AEE","AEP","AES",
-    "AFL","AIG","AIZ","AJG","AKAM","ALB","ALGN","ALL","ALLE","AMAT","AMCR","AMD","AME","AMGN","AMP",
-    "AMT","AMZN","ANET","AON","AOS","APA","APD","APH","APO","APP","APTV","ARE","ARES","ATO","AVB",
-    "AVGO","AVY","AWK","AXON","AXP","AZO","BA","BAC","BALL","BAX","BBY","BDX","BEN","BG","BIIB",
-    "BK","BKNG","BKR","BLDR","BLK","BMY","BR","BRK-B","BRO","BSX","BX","BXP","C","CAG","CAH",
-    "CARR","CAT","CB","CBOE","CBRE","CCI","CCL","CDNS","CDW","CEG","CF","CFG","CHD","CHRW","CHTR",
-    "CI","CINF","CL","CLX","CMCSA","CME","CMG","CMI","CMS","CNC","CNP","COF","COIN","COO","COP",
-    "COR","COST","CPAY","CPB","CPRT","CPT","CRL","CRM","CRWD","CSCO","CSGP","CSX","CTAS","CTRA",
-    "CTSH","CTVA","CVS","CVX","D","DAL","DASH","DD","DDOG","DE","DECK","DELL","DG","DGX","DHI",
-    "DHR","DIS","DKNG","DLR","DLTR","DOC","DOV","DOW","DPZ","DRI","DTE","DUK","DVA","DVN","DXCM",
-    "EA","EBAY","ECL","ED","EFX","EG","EIX","EL","ELV","EME","EMR","ENPH","EOG","EPAM","EQIX",
-    "EQR","EQT","ERIE","ES","ESS","ETN","ETR","EVRG","EW","EXC","EXE","EXPD","EXPE","EXR","F",
-    "FANG","FAST","FCX","FDS","FDX","FE","FFIV","FICO","FIS","FISV","FITB","FOX","FOXA","FRT",
-    "FSLR","FTNT","FTV","GD","GDDY","GE","GEHC","GEN","GEV","GILD","GIS","GL","GLD","GLW","GM",
-    "GNRC","GOOG","GOOGL","GPC","GPN","GRMN","GS","GWW","HAL","HAS","HBAN","HCA","HD","HIG","HII",
-    "HIMS","HLT","HON","HOOD","HPE","HPQ","HRL","HSIC","HST","HSY","HUBB","HUM","HWM","IBKR","IBM",
-    "ICE","IDXX","IEX","IFF","INCY","INTC","INTU","INVH","IP","IQV","IR","IRM","ISRG","IT","ITW",
-    "IVZ","J","JBHT","JBL","JCI","JKHY","JNJ","JPM","KDP","KEY","KEYS","KHC","KIM","KKR","KLAC",
-    "KMB","KMI","KO","KR","KVUE","L","LCID","LDOS","LEN","LH","LHX","LII","LIN","LKQ","LLY","LMT",
-    "LNT","LOW","LRCX","LULU","LUV","LVS","LW","LYB","LYV","MA","MAA","MAR","MARA","MAS","MCD",
-    "MCHP","MCK","MCO","MDLZ","MDT","MET","META","MGM","MHK","MKC","MLM","MMM","MNST","MO","MOH",
-    "MOS","MP","MPC","MPWR","MRK","MRNA","MS","MSCI","MSFT","MSI","MSTR","MTB","MTCH","MTD","MU",
-    "NCLH","NDAQ","NDSN","NEE","NEM","NFLX","NI","NIO","NKE","NOC","NOW","NRG","NSC","NTAP","NTRS",
-    "NUE","NVDA","NVO","NVR","NWS","NWSA","NXPI","O","ODFL","OKE","OMC","ON","ORCL","ORLY","OTIS",
-    "OXY","PANW","PAYC","PAYX","PCAR","PCG","PEG","PEP","PFE","PFG","PG","PGR","PH","PHM","PKG",
-    "PLD","PLTR","PM","PNC","PNR","PNW","PODD","POOL","PPG","PPL","PRU","PSA","PSX","PTC","PWR",
-    "PYPL","Q","QCOM","RCL","REG","REGN","RF","RIOT","RIVN","RJF","RKLB","RL","RMD","ROK","ROL",
-    "ROP","ROST","RSG","RTX","RVTY","SBAC","SBUX","SCHW","SHOP","SHW","SJM","SLB","SLV","SMCI",
-    "SNA","SNPS","SO","SOFI","SOLV","SPG","SPGI","SRE","STE","STLD","STT","STX","STZ","SW","SWK",
-    "SWKS","SYF","SYK","SYM","SYY","T","TAP","TDG","TDY","TECH","TEL","TER","TFC","TGT","TJX",
-    "TKO","TMO","TMUS","TPL","TPR","TRGP","TRMB","TROW","TRV","TSCO","TSLA","TSN","TT","TTD",
-    "TTWO","TXN","TXT","TYL","UAL","UBER","UDR","UHS","ULTA","UNH","UNP","UPS","URI","USB","V",
-    "VICI","VLO","VLTO","VMC","VRSK","VRSN","VRTX","VST","VTR","VTRS","VZ","WAB","WAT","WBD",
-    "WDAY","WDC","WEC","WELL","WFC","WM","WMB","WMT","WRB","WSM","WST","WTW","WY","WYNN","XEL",
-    "XOM","XYL","YUM","ZBH","ZBRA","ZTS"
-  ];
-
-  // ── Live fetch state ──
-  const [fetchPhase, setFetchPhase] = useState("");
-
-  // ── Auto-load: try bulk cache endpoint first, then fallback to CSV ──
+  // ── Auto-load bundled default CSV on startup ──
   useEffect(() => {
     const loadDefault = async () => {
-      setScanStatus("scanning");
-      setScanError(null);
-      setScanProgress(0);
-      setScores([]);
-      setAllScores([]);
-      setSelectedTicker(null);
-      cancelRef.current = false;
-
-      // High-value tickers to scan first so leaderboard populates immediately
-      const PRIORITY = ["AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","JPM","V","MA",
-        "UNH","XOM","LLY","JNJ","PG","HD","AVGO","MRK","COST","ABBV",
-        "CVX","BAC","KO","PEP","WMT","CRM","MCD","TMO","ACN","CSCO",
-        "ABT","DHR","ADBE","NKE","TXN","NEE","PM","RTX","QCOM","HON",
-        "AMGN","LOW","UPS","IBM","CAT","SPGI","GS","MS","BLK","INTU"];
-
-      // ── Attempt bulk load from server cache (single request) ──
       try {
-        setFetchPhase("Loading market data…");
-        setScanProgress(2);
+        setScanStatus("scanning");
+        setScanError(null);
+        setScanProgress(0);
+        setScores([]);
+        setAllScores([]);
+        setSelectedTicker(null);
+        cancelRef.current = false;
 
-        const res = await fetch("https://algogradient.com/yahoo-bulk.php");
-        if (!res.ok) throw new Error("Bulk endpoint not available");
-
-        setFetchPhase("Parsing data…");
-        setScanProgress(10);
-        const json = await res.json();
-        if (json.error) throw new Error(json.error);
-
-        // Parse all rows up front
-        setScanProgress(15);
-        setFetchPhase("Preparing tickers…");
-        const allParsed = {};
-        for (const [ticker, rows] of Object.entries(json)) {
-          const parsed = rows.map(r => ({ ...r, date: new Date(r.date) }));
-          if (parsed.length >= MIN_BARS) allParsed[ticker] = parsed;
-        }
-
-        const allTickers = Object.keys(allParsed);
-        if (allTickers.length === 0) throw new Error("No tickers in bulk response");
-
-        // ── PHASE 1: scan priority tickers immediately, show results fast ──
-        const priorityTickers = PRIORITY.filter(t => allParsed[t]);
-        const priorityMap = new Map(priorityTickers.map(t => [t, allParsed[t]]));
-
-        setScanProgress(18);
-        setFetchPhase(`Scanning top tickers…`);
-        setRawData(new Map(Object.entries(allParsed))); // full rawData for chart use
-
-        const onBatch = (partial) => {
-          setScores(partial);
-          setAllScores(partial);
-          if (partial.length > 0) {
-            setSelectedTicker(prev => prev || partial[0].ticker);
-            setActiveTab(prev => prev === "leaderboard" ? "chart" : prev);
-          }
-        };
-
-        const priorityResults = await runScan(priorityMap, tolerance,
-          (p) => setScanProgress(18 + Math.round(p * 0.22)),
-          cancelRef, windowMode, onBatch);
-
-        // Show priority results immediately — app is now usable
-        if (!cancelRef.current && priorityResults.length > 0) {
-          setAllScores(priorityResults);
-          setScores(priorityResults);
-          setScanStatus("done");
-          setScanProgress(40);
-          setFetchPhase("");
-          setSelectedTicker(priorityResults[0].ticker);
-          setActiveTab("chart");
-        }
-
-        // ── PHASE 2: scan remaining tickers silently in background ──
-        const remainingTickers = allTickers.filter(t => !priorityMap.has(t));
-        const remainingMap = new Map(remainingTickers.map(t => [t, allParsed[t]]));
-
-        if (remainingMap.size > 0 && !cancelRef.current) {
-          const bgResults = await runScan(remainingMap, tolerance,
-            (p) => setScanProgress(40 + Math.round(p * 0.6)),
-            cancelRef, windowMode);
-
-          if (!cancelRef.current) {
-            // Merge priority + background results and re-rank
-            const merged = [...priorityResults, ...bgResults]
-              .filter(r => (r.cup?.score > 0)||(r.rhs?.score > 0)||(r.hs?.score > 0)||(r.rt?.score > 0))
-              .sort((a, b) => b.score - a.score);
-            setAllScores(merged);
-            setScores(merged);
-            setScanProgress(100);
-          }
-        }
-
-        return;
-      } catch (_bulkErr) {
-        // Bulk endpoint unavailable — fall back to bundled CSV
-      }
-
-      // ── Fallback: bundled CSV ──
-      try {
-        setFetchPhase("Live data unavailable — loading bundled dataset…");
         const res = await fetch("/ohlcv_data_fixed.csv");
         if (!res.ok) throw new Error("Default data not found");
 
@@ -3280,11 +3145,10 @@ export default function App() {
         const parsed = await parseCSV(file);
         setRawData(parsed.map);
         setParseWarnings(parsed.warnings);
-        setFetchPhase("");
 
         if (parsed.map.size === 0) {
           setScanStatus("error");
-          setScanError("Bundled data loaded but no valid tickers found.");
+          setScanError("Default data loaded but no valid tickers found.");
           return;
         }
 
@@ -3300,9 +3164,9 @@ export default function App() {
           }
         }
       } catch (err) {
+        // Silently fall back to manual upload if default data fails
         setScanStatus("idle");
         setScanError(null);
-        setFetchPhase("");
       }
     };
     loadDefault();
@@ -3950,22 +3814,13 @@ export default function App() {
   const renderUpload = () => (
     <div style={S.card}>
       <div style={S.sectionTitle}>Data Source</div>
-      {scanStatus === "scanning" && fetchPhase && (
-        <div style={{
-          padding: "8px 12px", borderRadius: 8, marginBottom: 10,
-          background: "rgba(108,143,255,0.1)", border: "1px solid rgba(108,143,255,0.3)",
-          fontSize: 11, color: COLORS.accent, lineHeight: 1.5
-        }}>
-          ⟳ {fetchPhase}
-        </div>
-      )}
       {(scanStatus === "idle" || scanStatus === "done") && rawData && (
         <div style={{
           padding: "8px 12px", borderRadius: 8, marginBottom: 10,
           background: "rgba(38,166,154,0.1)", border: "1px solid rgba(38,166,154,0.3)",
           fontSize: 11, color: COLORS.green, lineHeight: 1.5
         }}>
-          ✓ Live data loaded — today − 5 yrs ({rawData.size} tickers)
+          ✓ Default dataset loaded ({rawData.size} tickers)
         </div>
       )}
       <label
@@ -4984,9 +4839,9 @@ export default function App() {
             display: "flex", alignItems: isMobile ? "stretch" : "center", gap: 18, flexShrink: 0,
             background: COLORS.surface, flexDirection: isMobile ? "column" : "row"
           }}>
-            <div style={{ width: isMobile ? "100%" : 260, height: isMobile ? 220 : 210, flexShrink: 0, display: "flex", justifyContent: "center" }}>
+            <div style={{ width: isMobile ? "100%" : 210, height: isMobile ? 220 : 190, flexShrink: 0, display: "flex", justifyContent: "center" }}>
               <ResponsiveContainer width="100%" height="100%">
-                <RadarChart data={radarData} outerRadius={isMobile ? 62 : 58} margin={{ top: 22, right: 28, bottom: 22, left: 52 }}>
+                <RadarChart data={radarData} outerRadius={isMobile ? 62 : 58} margin={{ top: 18, right: 22, bottom: 18, left: 22 }}>
                   <PolarGrid stroke={COLORS.border} />
                   <PolarAngleAxis
                     dataKey="metric"
@@ -5547,7 +5402,7 @@ export default function App() {
       : { label: `⏳ ${patternBarsFromEnd}b ago`, color: "#f87171" };
 
     return (
-      <div style={{ height: isMobile ? "auto" : "100%", minHeight: isMobile ? "85vh" : undefined, display: "flex", flexDirection: "column", overflowY: isMobile ? "visible" : "auto", overflowX: "hidden", background: "#0b0d11" }}>
+      <div style={{ height: isMobile ? "auto" : "100%", minHeight: isMobile ? "85vh" : undefined, display: "flex", flexDirection: "column", overflow: isMobile ? "visible" : "hidden", background: "#0b0d11" }}>
         <style>{`
 
         `}</style>
